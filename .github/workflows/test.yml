@@ -1,0 +1,221 @@
+name: EcoBridge Integration Test
+
+on: 
+  workflow_dispatch:
+    inputs:
+      debug_mode:
+        description: 'Enable Debug Logging'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mariadb:latest
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: ecobridge
+        ports:
+          - 3306:3306
+        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=10s --health-timeout=5s --health-retries=3
+
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # --- 1. 环境准备 ---
+    - name: Set up JDK 25 (Early Access)
+      uses: oracle-actions/setup-java@v1
+      with:
+        website: jdk.java.net
+        release: 25
+
+    - name: Setup Gradle Cache
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        cache-read-only: false
+
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Rust Dependencies
+      uses: swatinem/rust-cache@v2
+      with:
+        workspaces: ecobridge-rust
+        prefix-key: "ecobridge-rust-v1"
+
+    # --- 2. 构建 Rust Native 内核 ---
+    - name: Build Rust Native Kernel
+      working-directory: ./ecobridge-rust
+      run: |
+        cargo build --release
+        ls -l target/release/libecobridge_rust.so
+
+    # --- 3. 注入 Native 库 ---
+    - name: Inject Native Lib
+      run: |
+        mkdir -p ecobridge-java/src/main/resources
+        cp ecobridge-rust/target/release/libecobridge_rust.so ecobridge-java/src/main/resources/
+
+    # --- 4. 安装 jextract ---
+    - name: Install LLVM/Clang (Required by jextract)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libclang-dev clang
+
+    - name: Setup jextract
+      run: |
+        wget -q https://download.java.net/java/early_access/jextract/22/3/openjdk-22-jextract+3-13_linux-x64_bin.tar.gz
+        tar -xzf openjdk-22-jextract+3-13_linux-x64_bin.tar.gz
+        echo "$(pwd)/jextract-22/bin" >> $GITHUB_PATH
+        echo "JEXTRACT_HOME=$(pwd)/jextract-22" >> $GITHUB_ENV
+        ./jextract-22/bin/jextract --version || true
+
+    # --- 5. 构建 Java 插件 ---
+    - name: Build with Gradle
+      working-directory: ./ecobridge-java
+      run: |
+        chmod +x gradlew
+        ./gradlew clean shadowJar --no-daemon --build-cache
+
+    # --- 6. 搭建 Paper 测试服务器 (API Mode) ---
+    - name: Setup Paper Server Environment
+      run: |
+        mkdir test-server
+        cd test-server
+        mkdir plugins
+        
+        # === 1. 使用 PaperMC API 动态下载 ===
+        echo "🔍 Querying PaperMC API for latest 1.21.11 build..."
+        
+        MC_VER="1.21.11"
+        PROJECT="paper"
+        
+        # 1. 获取最新构建 ID (使用 jq 解析 JSON)
+        LATEST_BUILD=$(curl -s "https://api.papermc.io/v2/projects/${PROJECT}/versions/${MC_VER}/builds" | jq -r '.builds[-1].build')
+        
+        if [ "$LATEST_BUILD" == "null" ]; then
+            echo "❌ Failed to fetch build info from API. Is version $MC_VER correct?"
+            exit 1
+        fi
+        
+        echo "✅ Found latest build: #$LATEST_BUILD"
+        
+        # 2. 获取该构建的文件名
+        JAR_NAME=$(curl -s "https://api.papermc.io/v2/projects/${PROJECT}/versions/${MC_VER}/builds/${LATEST_BUILD}" | jq -r '.downloads.application.name')
+        
+        # 3. 拼接下载 URL
+        DOWNLOAD_URL="https://api.papermc.io/v2/projects/${PROJECT}/versions/${MC_VER}/builds/${LATEST_BUILD}/downloads/${JAR_NAME}"
+        
+        echo "⬇️ Downloading $JAR_NAME from API..."
+        curl -L -f -S -o paper.jar "$DOWNLOAD_URL" || {
+            echo "❌ Failed to download Paper jar from API!"
+            exit 1
+        }
+        
+        echo "eula=true" > eula.txt
+        
+        # 部署 EcoBridge
+        cp ../ecobridge-java/build/libs/EcoBridge-*.jar plugins/EcoBridge.jar
+        
+        # === 2. 下载依赖 ===
+        echo "⬇️ Downloading Dependencies..."
+        
+        download_dep() {
+            NAME=$1
+            URL=$2
+            echo "   >> Fetching $NAME..."
+            curl -L -f -S -A "Mozilla/5.0" -o "plugins/$NAME.jar" "$URL" || {
+                echo "❌ Failed to download $NAME"
+                exit 1
+            }
+        }
+        
+        download_dep "NightCore" "https://cdn.modrinth.com/data/Y4NRwMW5/versions/ZIVix7of/nightcore-2.13.1.jar"
+        download_dep "CoinsEngine" "https://cdn.modrinth.com/data/r0FB9U1e/versions/G0BJaAkm/CoinsEngine-2.6.0.jar"
+        download_dep "UltimateShop" "https://cdn.modrinth.com/data/mIaP5HAP/versions/Lh9TONZE/UltimateShop-4.2.3.jar"
+        download_dep "Vault" "https://github.com/MilkBowl/Vault/releases/download/1.7.3/Vault.jar"
+        download_dep "PlaceholderAPI" "https://cdn.modrinth.com/data/lKEzGugV/versions/sn9LYZkM/PlaceholderAPI-2.11.7.jar"
+        
+        # === 3. 生成配置 ===
+        mkdir -p plugins/EcoBridge
+        cat <<EOF > plugins/EcoBridge/config.yml
+        database:
+          host: 127.0.0.1
+          port: 3306
+          database: ecobridge
+          username: root
+          password: root
+          pool-size: 5
+        redis:
+          enabled: true
+          host: 127.0.0.1
+          port: 6379
+          server-id: "github-ci-runner"
+        economy:
+          currency-id: "coins"
+          debug: ${{ inputs.debug_mode || true }} 
+        EOF
+        
+        echo "✅ Environment Setup Complete."
+
+    # --- 7. 运行测试 ---
+    - name: Run Server & Audit Logs
+      working-directory: ./test-server
+      timeout-minutes: 5
+      run: |
+        java \
+          --enable-preview \
+          --enable-native-access=ALL-UNNAMED \
+          -Dfile.encoding=UTF-8 \
+          -jar paper.jar --nogui > server.log 2>&1 &
+        
+        SERVER_PID=$!
+        echo "Server started with PID $SERVER_PID. Waiting for logs..."
+        
+        MAX_RETRIES=60
+        COUNT=0
+        SUCCESS=0
+        
+        while [ $COUNT -lt $MAX_RETRIES ]; do
+          if grep -q "Done" server.log; then
+            echo "✅ Server started successfully (Done detected)!"
+            SUCCESS=1
+            break
+          fi
+          
+          if grep -qE "EcoBridge.*(Exception|Error)|UnsupportedOperationException" server.log; then
+            echo "❌ CRITICAL: EcoBridge crashed during startup!"
+            echo "--- CRASH LOG SNIPPET ---"
+            grep -C 15 -E "EcoBridge.*(Exception|Error)|UnsupportedOperationException" server.log
+            kill $SERVER_PID
+            exit 1
+          fi
+          
+          sleep 2
+          ((COUNT++))
+        done
+        
+        kill $SERVER_PID || true
+        
+        echo "================= FULL SERVER LOG =================="
+        cat server.log
+        echo "===================================================="
+        
+        if [ $SUCCESS -eq 0 ]; then
+          echo "❌ Test Timeout: Server failed to start within time limit."
+          exit 1
+        fi

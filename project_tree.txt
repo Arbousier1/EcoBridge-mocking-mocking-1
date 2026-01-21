@@ -1,0 +1,109 @@
+📦 EcoBridge/
+├── .github/
+│   └── workflows/
+│       ├── main.yml
+│       └── test.yml
+├── ecobridge-java/
+│   ├── gradle/
+│   │   └── wrapper/
+│   │       └── gradle-wrapper.properties
+│   ├── src/
+│   │   └── main/
+│   │       ├── java/
+│   │       │   └── top/
+│   │       │       └── ellan/
+│   │       │           └── ecobridge/
+│   │       │               ├── api/
+│   │       │               │   ├── EcoLimitAPI.java
+│   │       │               │   ├── ItemLimit.java
+│   │       │               │   └── MarketPhase.java
+│   │       │               ├── core/
+│   │       │               │   ├── cache/
+│   │       │               │   │   └── HotDataCache.java
+│   │       │               │   ├── engine/
+│   │       │               │   │   └── PriceComputeEngine.java
+│   │       │               │   └── manager/
+│   │       │               │       ├── EconomicStateManager.java
+│   │       │               │       ├── EconomyManager.java
+│   │       │               │       ├── ItemConfigManager.java
+│   │       │               │       ├── LimitManager.java
+│   │       │               │       ├── MacroEngine.java
+│   │       │               │       ├── PricingManager.java
+│   │       │               │       └── TransferManager.java
+│   │       │               ├── data/
+│   │       │               │   ├── database/
+│   │       │               │   │   ├── DatabaseManager.java
+│   │       │               │   │   └── TransactionDao.java
+│   │       │               │   ├── redis/
+│   │       │               │   │   └── RedisManager.java
+│   │       │               │   ├── storage/
+│   │       │               │   │   ├── ActivityCollector.java
+│   │       │               │   │   └── AsyncLogger.java
+│   │       │               │   └── transaction/
+│   │       │               │       ├── ReconciliationTask.java
+│   │       │               │       └── TransactionJournal.java
+│   │       │               ├── ffi/
+│   │       │               │   ├── bridge/
+│   │       │               │   │   ├── EconStatus.java
+│   │       │               │   │   ├── NativeBridge.java
+│   │       │               │   │   ├── NativeContextBuilder.java
+│   │       │               │   │   └── NativeLoader.java
+│   │       │               │   └── model/
+│   │       │               │       ├── NativeTransferResult.java
+│   │       │               │       └── SaleRecord.java
+│   │       │               ├── platform/
+│   │       │               │   ├── asm/
+│   │       │               │   │   ├── ASMBridge.java
+│   │       │               │   │   └── EcoShopTransformer.java
+│   │       │               │   ├── command/
+│   │       │               │   │   ├── AdminCommand.java
+│   │       │               │   │   └── TransferCommand.java
+│   │       │               │   ├── hook/
+│   │       │               │   │   ├── CraftEngineSupport.java
+│   │       │               │   │   ├── EcoPlaceholderExpansion.java
+│   │       │               │   │   └── UltimateShopHook.java
+│   │       │               │   └── listener/
+│   │       │               │       ├── CacheListener.java
+│   │       │               │       ├── CoinsEngineListener.java
+│   │       │               │       ├── CommandHijacker.java
+│   │       │               │       ├── EcoBridgeReloadListener.java
+│   │       │               │       └── TradeListener.java
+│   │       │               ├── util/
+│   │       │               │   ├── ConfigMigrator.java
+│   │       │               │   ├── ConfigValidator.java
+│   │       │               │   ├── HolidayManager.java
+│   │       │               │   ├── InternalPlaceholder.java
+│   │       │               │   ├── LogUtil.java
+│   │       │               │   └── UltimateShopImporter.java
+│   │       │               └── EcoBridge.java
+│   │       └── resources/
+│   │           ├── config.yml
+│   │           └── paper-plugin.yml
+│   ├── build.gradle.kts
+│   ├── gradlew
+│   ├── gradlew.bat
+│   ├── local.properties
+│   └── settings.gradle.kts
+├── ecobridge-rust/
+│   ├── src/
+│   │   ├── economy/
+│   │   │   ├── control.rs
+│   │   │   ├── environment.rs
+│   │   │   ├── macro_eco.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── pricing.rs
+│   │   │   └── summation.rs
+│   │   ├── security/
+│   │   │   ├── mod.rs
+│   │   │   └── regulator.rs
+│   │   ├── lib.rs
+│   │   ├── models.rs
+│   │   └── storage.rs
+│   ├── build.rs
+│   ├── Cargo.lock
+│   ├── Cargo.toml
+│   ├── cbindgen.toml
+│   └── ecobridge_rust.h
+├── .gitignore
+├── exported_code.txt
+└── README.md

@@ -1,0 +1,118 @@
+# ============================================================
+# EcoBridge - 高级宏观自适应经济内核 (针对生存服优化版)
+# 核心驱动：Java 25 + Rust SIMD 加速内核
+# ============================================================
+
+# [系统基础]
+system:
+  # 调试模式：平时关掉。开启后会像流水一样输出计算明细，仅供查错。
+  debug: false
+  # 记账采样率：100 表示每一笔钱变动都记账。如果服里几百人导致卡顿，可以调低。
+  log-sample-rate: 100
+  # 备用模式：如果高性能 Rust 内核因为环境问题没加载，是否允许切换到 Java 模式运行。
+  fallback-mode: true
+
+# [财务处] - 数据库连接
+database:
+  host: "localhost"
+  port: 3306
+  database: "ecobridge"
+  username: "root"
+  password: "your_secure_password"
+  # 办事窗口：建议设为 (CPU核心数 * 2) + 1。
+  pool-size: 15
+
+# [跨服同步] - 如果你有多个子服共用经济
+redis:
+  enabled: false
+  host: "127.0.0.1"
+  port: 6379
+  password: ""
+  server-id: "survival-01"
+
+# [经济心脏] - 决定钱值不值钱
+economy:
+  # 核心货币名：必须和 CoinsEngine 里的货币 ID 对上。
+  currency-id: "coins"
+  # 预期的货币总量：你希望全服一共流通多少钱。这决定了通胀率基准。
+  m1-supply: 10000000.0
+  # 波动触发值：单笔交易超过这个数，会被内核判定为“大宗市场事件”。
+  volatility-threshold: 50000.0
+  # 每日冷却：系统每天会自动回收 5% 的多余“热度”，防止物价无限涨。
+  daily-decay-rate: 0.05
+  # 记忆力 (Tau)：物价会参考过去 7 天的买卖情况。天数越长，物价越稳。
+  tau: 7.0
+  # 出售折扣：玩家把东西卖给商店时，拿回原价的百分之几。
+  sell-ratio: 0.5
+  # 默认灵敏度：数字越大，有人大量买卖时价格波动就越狠。
+  default-lambda: 0.002
+  # 历史回溯天数：计算地板价时参考多长时间的数据。
+  history-days-limit: 7
+  # 节假日乘数：过年过节物价自动波动的倍率。
+  holiday-multiplier: 1.2
+
+  # [宏观调控]
+  macro:
+    # 理想流速：你希望服里每秒钟平均产生多少钱的交易。
+    target-velocity: 0.04
+    # 蓄水池容量：平均每个玩家能存多少钱而不引起系统预警。
+    capacity-per-user: 5000.0
+
+  # [减震器 (PID)] - 让物价不要像过山车一样乱跳
+  pid:
+    kp: 0.4   # 弹性：对现在买卖的反应。
+    ki: 0.08  # 稳性：对长期偏离基准价的纠正。
+    kd: 0.15  # 预测：对恶意刷钱、投机行为的阻尼。
+
+  # [自然波动]
+  environment:
+    seasonal-amplitude: 0.15 # 季节性涨跌：模拟物价随日历波动。
+    weekend-multiplier: 1.2  # 周末乘数：周末人多，价格自动上浮。
+    newbie-protection: 0.2  # 新手保护：让新人买卖更便宜，老玩家更贵。
+
+  # [风控与转账税] - 警察系统
+  audit-settings:
+    # 转账手续费：默认 5%。
+    base-tax-rate: 0.05
+    # 奢侈税线：转账超过 10 万，额外收重税。
+    luxury-threshold: 100000.0
+    luxury-tax-rate: 0.10
+    # 劫富济贫：防止大号养小号，穷人给富人打钱收 20% 税。
+    poor-threshold: 10000.0
+    rich-threshold: 1000000.0
+    wealth-gap-tax-rate: 0.20
+    # 流速拦截：单人每秒资金流动过 1000 块直接拦截（防刷钱脚本）。
+    velocity-threshold: 1000.0
+    # 身份判定：玩多久算老手（小时）。
+    newbie-hours: 10.0
+    veteran-hours: 100.0
+
+    # [个人限额] - 防止脚本把商店卖空
+    # 额度 = 基础额度 + (增长系数 * 根号下在线时长)
+    default-base-limit: 2364.0   # 新人初始只能买卖 64 个。
+    default-growth-rate: 16.0  # 玩得越久，商店给的额度越高。
+    default-max-limit: 4728.0   # 最终限额天花板。
+
+# [外部 API]
+holiday-api:
+  url-template: "https://holiday.ailcc.com/api/holiday/year/{year}"
+
+# ============================================================
+# 附录：生存服务器参数演变参考（请根据阶段手动修改上面对应的值）
+# ============================================================
+# 1. 【开荒期】 (1-30天):
+#    m1-supply: 1000000.0, default-lambda: 0.005, newbie-protection: 0.4
+#    目的：通过高灵敏度和强保护，让新人更容易通过基础物资赚钱。
+#
+# 2. 【成熟期】 (30-120天):
+#    m1-supply: 10000000.0, default-lambda: 0.002, newbie-protection: 0.2
+#    目的：经济稳定，物价平缓，鼓励玩家进行中等规模贸易。
+#
+# 3. 【养老期】 (120天以后):
+#    m1-supply: 50000000.0, default-lambda: 0.0005, luxury-threshold: 1000000.0
+#    目的：金币极度充裕，大幅降低物价灵敏度，通过极高奢侈税防止通胀。
+# ============================================================
+
+# [内部状态] - 别乱动，系统自动更新的
+internal:
+  economy-heat: 0.0

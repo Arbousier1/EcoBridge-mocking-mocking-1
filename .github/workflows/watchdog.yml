@@ -1,0 +1,86 @@
+name: Upstream Watchdog (UltimateShop)
+
+on:
+  push:
+    branches: [ "master", "mocking-1" ]
+  pull_request:
+    branches: [ "master", "mocking-1" ]
+  schedule:
+    - cron: '0 2 * * *' # 每天凌晨 2 点自动巡检
+  workflow_dispatch:
+
+jobs:
+  compatibility-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # -----------------------------------------------------------
+      # 1. 代码检出
+      # -----------------------------------------------------------
+      - name: Checkout EcoBridge
+        uses: actions/checkout@v4
+        with:
+          path: ecobridge # ⚠️ 注意：代码被下载到了 ecobridge 子目录
+
+      - name: Checkout UltimateShop
+        uses: actions/checkout@v4
+        with:
+          repository: ManyouTeam/UltimateShop
+          path: ultimateshop
+          ref: master
+
+      # -----------------------------------------------------------
+      # 2. Rust 核心构建 (带缓存优化)
+      # -----------------------------------------------------------
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # 指向 ecobridge 子目录下的 rust 项目
+          workspaces: "ecobridge/ecobridge-rust"
+          # 使用与主构建流程一致的 key 前缀，共享缓存命中率
+          prefix-key: "v2-rust-ubuntu-latest"
+
+      - name: Build Rust Library (Release)
+        working-directory: ecobridge/ecobridge-rust
+        run: |
+          cargo build --release
+          
+      - name: Install Native Libs
+        run: |
+          # 将编译好的 .so 文件移动到 Java 资源目录，模拟真实运行环境
+          mkdir -p ecobridge/ecobridge-java/src/main/resources
+          cp ecobridge/ecobridge-rust/target/release/libecobridge_rust.so ecobridge/ecobridge-java/src/main/resources/
+          echo "✅ Native library installed for tests."
+
+      # -----------------------------------------------------------
+      # 3. Java 环境与上游构建
+      # -----------------------------------------------------------
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25' # 升级到 JDK 25 以支持 FFM
+          distribution: 'oracle'
+
+      - name: Build UltimateShop
+        working-directory: ultimateshop
+        run: |
+          chmod +x gradlew
+          ./gradlew clean shadowJar -x test
+          
+          mkdir -p ../libs
+          find build/libs -name "*.jar" -not -name "*-sources.jar" -not -name "*-javadoc.jar" -exec cp {} ../libs/UltimateShop.jar \;
+          echo "UltimateShop build completed."
+
+      # -----------------------------------------------------------
+      # 4. 运行哨兵测试 (路径已修复)
+      # -----------------------------------------------------------
+      - name: Run Sentinel Tests
+        # [Fix] 关键修复：指向包含 build.gradle.kts 的正确子目录
+        working-directory: ecobridge/ecobridge-java
+        run: |
+          chmod +x gradlew
+          # 运行测试，并通过 System Property 传入 UltimateShop jar 的位置
+          ./gradlew test --tests "top.ellan.ecobridge.test.compatibility.UltimateShopCompatibilityTest" -Dultimateshop.jar.path="../../libs/UltimateShop.jar"

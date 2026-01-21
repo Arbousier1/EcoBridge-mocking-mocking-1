@@ -1,0 +1,50 @@
+name: EcoBridge
+version: '${version}'
+# 确保此路径与你重构后的 EcoBridge.java 物理位置完全一致
+main: top.ellan.ecobridge.EcoBridge
+api-version: '1.21'
+authors: [ Ellan ]
+description: "基于 Java 25 FFM + Rust 核心的 DDD 架构动态经济系统"
+website: "https://github.com/Ellan/EcoBridge"
+
+# Paper 现代依赖管理
+dependencies:
+  server:
+    # 核心前置：必须在 EcoBridge 启动前准备就绪
+    CoinsEngine:
+      load: BEFORE
+      required: true
+    nightcore:
+      load: BEFORE
+      required: true
+    UltimateShop:
+      load: BEFORE
+      required: true
+      
+    # 扩展/软依赖
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+    Vault:
+      load: BEFORE
+      required: false
+    CraftEngine:
+      load: BEFORE
+      required: false
+
+permissions:
+  ecobridge.admin:
+    description: "管理 EcoBridge 核心引擎及影子模式"
+    default: op
+  
+  ecobridge.command.transfer:
+    description: "使用受 Rust 内核监管的转账系统"
+    default: "true"
+
+  ecobridge.bypass.tax:
+    description: "豁免由 Rust 内核计算的动态交易税"
+    default: op
+
+  ecobridge.bypass.block:
+    description: "豁免 Rust 内核的安全审计拦截"
+    default: op
