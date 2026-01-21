@@ -2,7 +2,7 @@ name: EcoBridge Core Sync & Build
 
 on:
   push:
-    branches: [ "mocking-1" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 env:
