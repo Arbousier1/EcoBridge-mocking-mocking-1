@@ -10,11 +10,21 @@ import top.ellan.ecobridge.application.service.ItemConfigManager;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * UltimateShopImporter (v1.1 - Enhanced Compatibility)
+ * 职责：从 UltimateShop 自动同步商品数据到 EcoBridge 体系。
+ */
 public class UltimateShopImporter {
 
     public static String runImport(double defaultLambda) {
+        // 1. 插件启用检查
         if (!EcoBridge.getInstance().getServer().getPluginManager().isPluginEnabled("UltimateShop")) {
             return "<red>未检测到 UltimateShop 插件，无法执行导入。";
+        }
+
+        // 2. 运行时实例安全检查 (防止 UltimateShop 还没加载完)
+        if (ConfigManager.configManager == null || ConfigManager.configManager.getShopList() == null) {
+            return "<yellow>UltimateShop 实例尚未准备就绪，请稍后重试。";
         }
 
         // 获取 items.yml 配置对象
@@ -29,30 +39,30 @@ public class UltimateShopImporter {
         AtomicInteger skipCount = new AtomicInteger(0);
 
         try {
-            // 修正 1: 使用 ConfigManager.configManager.getShopList() 获取商店列表
-            //
+            // 遍历所有商店
             for (ObjectShop shop : ConfigManager.configManager.getShopList()) {
-                
-                // 修正 2: 获取商店名称作为分类 Key
+                if (shop == null) continue;
+
                 String shopId = shop.getShopName(); 
 
-                // 修正 3: 使用 getProductList() 遍历物品
+                // 遍历商店内所有物品
                 for (ObjectItem item : shop.getProductList()) {
-                    
-                    // 修正 4: 使用 getItemConfig() 获取配置片段
-                    //
+                    if (item == null) continue;
+
+                    // 获取该物品原始的 YAML 配置片段
                     ConfigurationSection itemSection = item.getItemConfig();
                     if (itemSection == null) continue;
 
-                    // 检查并获取 Vault 价格
+                    // 增强版价格识别逻辑
                     double buyPrice = getVaultPrice(itemSection);
                     
+                    // 过滤掉无价格或无效价格的物品
                     if (buyPrice <= 0.001) {
                         skipCount.incrementAndGet();
                         continue;
                     }
 
-                    // 修正 5: 使用 getProduct() 获取物品ID (即配置节名称)
+                    // 获取物品标识符 (通常是 material 名或物品键)
                     String productId = item.getProduct();
                     if (productId == null || productId.isEmpty()) {
                         productId = "UNKNOWN_" + successCount.get();
@@ -60,67 +70,67 @@ public class UltimateShopImporter {
 
                     String path = "item-settings." + shopId + "." + productId;
                     
-                    // 写入到 items.yml
+                    // 执行增量同步，不覆盖已有配置
                     if (!itemConfig.contains(path)) {
                         itemConfig.set(path + ".base-price", buyPrice);
                         itemConfig.set(path + ".lambda", defaultLambda);
-                        // 写入默认权重
+                        
+                        // 初始化经济模型默认权重
                         itemConfig.set(path + ".weights.seasonal", 0.25);
                         itemConfig.set(path + ".weights.weekend", 0.25);
                         itemConfig.set(path + ".weights.newbie", 0.25);
                         itemConfig.set(path + ".weights.inflation", 0.25);
                         
                         successCount.incrementAndGet();
-                        LogUtil.debug("已导入: " + shopId + " -> " + productId + " ($" + buyPrice + ")");
+                        LogUtil.debug("已导入新商品: " + shopId + " -> " + productId + " ($" + buyPrice + ")");
                     } else {
                         skipCount.incrementAndGet();
                     }
                 }
             }
         } catch (NoClassDefFoundError | Exception e) {
-            LogUtil.error("导入 UltimateShop 配置时发生错误，请检查插件版本兼容性。", e);
+            LogUtil.error("导入 UltimateShop 配置时发生致命错误，请检查版本兼容性。", e);
             return "<red>导入失败: " + e.getMessage();
         }
 
-        // 保存并重载
+        // 保存文件到磁盘并重载 EcoBridge 内存缓存
         ItemConfigManager.save();
         
         if (EcoBridge.getInstance().isFullyInitialized()) {
             EcoBridge.getInstance().reload();
         }
 
-        return "<green>导入完成 (items.yml)!</green> <gray>新增: <white>" + successCount.get() + "</white>, 跳过/已存在: <white>" + skipCount.get() + "</white>";
+        return "<green>✔ 导入完成!</green> <gray>新增物品: <white>" + successCount.get() + "</white>, 跳过/已存在: <white>" + skipCount.get() + "</white>";
     }
 
     /**
-     * 解析配置以获取 Vault 价格
-     * 直接读取 ConfigurationSection 可以兼容不同的 ObjectPrices 实现版本
+     * 增强版价格获取逻辑：支持显式定义识别与递归通配符搜索
      */
     private static double getVaultPrice(ConfigurationSection section) {
-        // 模式 1: buy-prices 复杂节点 (UltimateShop 新版标准)
-        // 结构通常为:
-        // buy-prices:
-        //   economy: 100.0
-        if (section.isConfigurationSection("buy-prices")) {
-            ConfigurationSection prices = section.getConfigurationSection("buy-prices");
-            if (prices != null) {
-                // "economy" 是 UltimateShop 默认代表 Vault 的键
-                if (prices.contains("economy")) return prices.getDouble("economy");
-                // 有些版本可能直接使用 "vault"
-                if (prices.contains("vault")) return prices.getDouble("vault");
+        // --- 策略 1: 检查已知标准路径 (高优先级) ---
+        if (section.contains("buy-prices.economy")) return section.getDouble("buy-prices.economy");
+        if (section.contains("buy-prices.vault")) return section.getDouble("buy-prices.vault");
+        if (section.contains("price.buy")) return section.getDouble("price.buy");
+        
+        // --- 策略 2: 递归通配符识别 (针对自定义配置或混淆版) ---
+        // 遍历该物品节点下所有的键 (含深层节点)
+        for (String key : section.getKeys(true)) {
+            // 匹配包含 "price" 且不包含 "sell" 的数字键
+            String lowerKey = key.toLowerCase();
+            if (lowerKey.contains("price") && !lowerKey.contains("sell")) {
+                // 确保它是一个可以解析为 double 的数值
+                if (section.isDouble(key) || section.isInt(key)) {
+                    double val = section.getDouble(key);
+                    // 过滤掉 0 或负数，确保拿到的是真实标价
+                    if (val > 0.001) return val;
+                }
             }
         }
-        
-        // 模式 2: 简单价格模式 (旧版或简化版)
-        // 结构通常为:
-        // price:
-        //   buy: 100.0
-        // economy-plugin: Vault
-        if (section.contains("price.buy")) {
-            String ecoType = section.getString("economy-plugin", "Exp");
-            if ("Vault".equalsIgnoreCase(ecoType) || "CoinsEngine".equalsIgnoreCase(ecoType) || "Economy".equalsIgnoreCase(ecoType)) {
-                return section.getDouble("price.buy");
-            }
+
+        // --- 兜底逻辑 ---
+        // 特殊检查：有些版本可能直接在根节点使用 economy 键
+        if (section.contains("economy") && section.isDouble("economy")) {
+            return section.getDouble("economy");
         }
 
         return -1.0;
