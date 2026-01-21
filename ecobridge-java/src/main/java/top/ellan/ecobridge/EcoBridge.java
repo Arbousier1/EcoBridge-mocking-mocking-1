@@ -31,6 +31,7 @@ import top.ellan.ecobridge.infrastructure.persistence.storage.AsyncLogger;
 import top.ellan.ecobridge.util.ConfigMigrator;
 import top.ellan.ecobridge.util.HolidayManager;
 import top.ellan.ecobridge.util.LogUtil;
+import top.ellan.ecobridge.util.UltimateShopImporter; // [新增] 导入实用工具类
 
 import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Field;
@@ -44,13 +45,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * EcoBridge v1.6.5 - Initialization Fix
- * <p>
- * 修复日志:
- * 1. [Fix] 修复 ActivityCollector.startHeartbeat 不可见的编译错误，改用 init()。
- * 2. [Refactor] 移除主类中冗余的 Listener 实现，避免事件双重处理。
+ * EcoBridge v1.6.6 - Auto-Sync Integration
  */
-public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Listener
+public final class EcoBridge extends JavaPlugin {
 
     private static volatile EcoBridge instance;
     private static final MiniMessage MM = MiniMessage.miniMessage();
@@ -81,7 +78,6 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
             bootstrapInfrastructure();
             
             // [Fix] 使用 init() 替代 startHeartbeat()
-            // init() 内部包含了 startHeartbeat() 逻辑以及必要的事件监听器注册
             ActivityCollector.init(this);
             
             // 注册 ASM 转换器
@@ -113,6 +109,12 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
 
             // 执行物理指令劫持，锁定全服转账入口
             new CommandHijacker(this).hijackAllCurrencies();
+
+            // [新增] 启动时自动从 UltimateShop 导入商品数据
+            if (getServer().getPluginManager().isPluginEnabled("UltimateShop")) {
+                double defaultLambda = getConfig().getDouble("economy.default-lambda", 0.002);
+                UltimateShopImporter.runImport(defaultLambda);
+            }
 
             this.fullyInitialized.set(true);
             
@@ -254,7 +256,6 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
 
     private void registerListeners() {
         var pm = getServer().getPluginManager();
-        // [Fix] 移除 pm.registerEvents(this, this); 因为主类不再负责 ActivityCollector 的监听
         pm.registerEvents(new CoinsEngineListener(this), this);
         pm.registerEvents(new CacheListener(), this);
     }
@@ -277,7 +278,6 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
 
     /**
      * [Paper Adaption] 动态指令注册
-     * 兼容 paper-plugin.yml，绕过 getCommand() 的限制
      */
     private void registerCommands() {
         try {
@@ -285,7 +285,6 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
             commandMapField.setAccessible(true);
             CommandMap commandMap = (CommandMap) commandMapField.get(Bukkit.getServer());
 
-            // 1. 注册 ecopay
             commandMap.register("ecobridge", new DynamicCommand(
                 "ecopay",
                 "通过 Rust 物理内核审计发起受监管的转账",
@@ -295,11 +294,10 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
                 new TransferCommand()
             ));
 
-            // 2. 注册 ecoadmin
             commandMap.register("ecobridge", new DynamicCommand(
                 "ecoadmin",
                 "EcoBridge 核心管理指令 (Native内核控制/重载/影子模式切换)",
-                "/ecoadmin <shadow|reload>",
+                "/ecoadmin <shadow|reload|import>",
                 Arrays.asList("eb", "eco"),
                 "ecobridge.admin",
                 new AdminCommand()
@@ -312,9 +310,6 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
         }
     }
 
-    /**
-     * [Helper] 将 CommandExecutor 适配为 Bukkit Command
-     */
     private static class DynamicCommand extends org.bukkit.command.Command {
         private final org.bukkit.command.CommandExecutor executor;
 
@@ -342,14 +337,16 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
         if (PricingManager.getInstance() != null) PricingManager.getInstance().loadConfig();
         if (TransferManager.getInstance() != null) TransferManager.getInstance().loadConfig();
         if (limitAPI != null) limitAPI.reloadCache();
+
+        // [新增] 重载时自动再次同步商品数据
+        if (getServer().getPluginManager().isPluginEnabled("UltimateShop")) {
+            double defaultLambda = getConfig().getDouble("economy.default-lambda", 0.002);
+            UltimateShopImporter.runImport(defaultLambda);
+        }
         
         // 重载时也打印一次 Banner
         printSummaryBanner();
     }
-
-    // [Fix] 移除 onJoin / onQuit 冗余方法
-    // @EventHandler public void onJoin(PlayerJoinEvent event) ...
-    // @EventHandler public void onQuit(PlayerQuitEvent event) ...
 
     public ExecutorService getVirtualExecutor() { return virtualExecutor; }
     public static MiniMessage getMiniMessage() { return MM; }
@@ -359,14 +356,9 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
         Bukkit.getConsoleSender().sendMessage(MM.deserialize(msg, resolvers));
     }
 
-    // ========================================================================================
-    // [New Feature] 完美对齐的 Banner 生成系统 (v1.6.4)
-    // ========================================================================================
-
     private void printSummaryBanner() {
         String version = getPluginMeta().getVersion();
         
-        // 1. 准备所有要显示的内容
         List<String> lines = new ArrayList<>();
         lines.add("EcoBridge v" + version);
         lines.add("Native Engine: " + (NativeBridge.isLoaded() ? "Active (Rust/FFM)" : "Disabled (Java fallback)"));
@@ -374,16 +366,13 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
         lines.add("Concurrency: Rayon & Virtual Threads");
         lines.add("Paper Compatibility: Native Mode");
 
-        // 2. 边框样式
         String borderGradient = "<gradient:aqua:blue>";
         String textGradient = "<gradient:white:gray>";
-        int boxWidth = 55; // 盒子总视觉宽度
+        int boxWidth = 55;
 
-        // 3. 构建消息
         sendConsole(borderGradient + buildBorder("┏", "━", "┓", boxWidth) + "</gradient>");
         
         for (String line : lines) {
-            // -4 是因为左右各有一个 "┃ " (视觉宽度为 2)
             String centeredLine = centerText(line, boxWidth - 4); 
             sendConsole(borderGradient + "┃ <reset>" + textGradient + centeredLine + "</gradient>" + borderGradient + " ┃</gradient>");
         }
@@ -391,42 +380,23 @@ public final class EcoBridge extends JavaPlugin { // [Fix] 移除 implements Lis
         sendConsole(borderGradient + buildBorder("┗", "━", "┛", boxWidth) + "</gradient>");
     }
 
-    /**
-     * 生成定长边框
-     */
     private String buildBorder(String left, String mid, String right, int width) {
-        // 左右各占2视觉宽度 (全角或符号)，实际上字符本身是1
-        // 这里简单处理：让中间的 ━ 重复足够多次
-        // 视觉宽度：left(1) + mid(n) + right(1) = width
         return left + mid.repeat(width - 2) + right;
     }
 
-    /**
-     * 核心算法：中英文混合居中
-     */
     private String centerText(String text, int width) {
         int textVisualLength = getVisualLength(text);
-        
-        if (textVisualLength >= width) {
-            return text; // 文本太长，不处理
-        }
-
+        if (textVisualLength >= width) return text;
         int padding = width - textVisualLength;
         int leftPad = padding / 2;
         int rightPad = padding - leftPad;
-
         return " ".repeat(leftPad) + text + " ".repeat(rightPad);
     }
 
-    /**
-     * 计算字符串的视觉宽度 (中文=2, 英文=1)
-     */
     private int getVisualLength(String s) {
         if (s == null) return 0;
         int length = 0;
         for (char c : s.toCharArray()) {
-            // 简单判断：ASCII 范围外通常是宽字符 (包括中文、全角符号)
-            // 这种判断对绝大多数控制台字体适用
             length += (c > 127) ? 2 : 1;
         }
         return length;
