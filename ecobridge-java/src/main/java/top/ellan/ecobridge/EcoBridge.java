@@ -5,11 +5,10 @@ import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandMap;
 import org.bukkit.command.CommandSender;
-// [Refactor] 移除 Listener 接口，事件监听已下放至各组件内部
-// import org.bukkit.event.EventHandler;
-// import org.bukkit.event.Listener;
-// import org.bukkit.event.player.PlayerJoinEvent;
-// import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.NotNull;
 import top.ellan.ecobridge.api.EcoLimitAPI;
@@ -28,10 +27,11 @@ import top.ellan.ecobridge.application.service.*;
 import top.ellan.ecobridge.infrastructure.persistence.redis.RedisManager;
 import top.ellan.ecobridge.infrastructure.persistence.storage.ActivityCollector;
 import top.ellan.ecobridge.infrastructure.persistence.storage.AsyncLogger;
+import top.ellan.ecobridge.manager.ItemConfigManager; // 确保导入
 import top.ellan.ecobridge.util.ConfigMigrator;
 import top.ellan.ecobridge.util.HolidayManager;
 import top.ellan.ecobridge.util.LogUtil;
-import top.ellan.ecobridge.util.UltimateShopImporter; // [新增] 导入实用工具类
+import top.ellan.ecobridge.util.UltimateShopImporter;
 
 import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Field;
@@ -45,9 +45,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * EcoBridge v1.6.6 - Auto-Sync Integration
+ * EcoBridge v1.6.6 - Auto-Sync Integration & Init Fix
+ * <p>
+ * 更新记录:
+ * 1. [Init] 调整 ItemConfigManager 初始化顺序，解决 items.yml 加载依赖问题。
+ * 2. [Sync] 集成 UltimateShopImporter，支持启动和重载时自动同步商品。
+ * 3. [Stability] 增加 isInitialized() 检查，防止异步任务在关机时访问空实例。
  */
-public final class EcoBridge extends JavaPlugin {
+public final class EcoBridge extends JavaPlugin implements Listener {
 
     private static volatile EcoBridge instance;
     private static final MiniMessage MM = MiniMessage.miniMessage();
@@ -72,13 +77,12 @@ public final class EcoBridge extends JavaPlugin {
             saveDefaultConfig();
             ConfigMigrator.checkAndMigrate(this);
             
-            // [修复] 在引导基础设施前，优先初始化物品配置管理器
+            // [关键修复] 在引导基础设施前，优先初始化物品配置管理器
+            // 确保后续 LimitManager 加载时 items.yml 已就绪
             ItemConfigManager.init(this);
             
             bootstrapInfrastructure();
-            
-            // [Fix] 使用 init() 替代 startHeartbeat()
-            ActivityCollector.init(this);
+            ActivityCollector.startHeartbeat(this); // 保持原有命名习惯
             
             // 注册 ASM 转换器
             setupBytecodeTransformer();
@@ -100,6 +104,8 @@ public final class EcoBridge extends JavaPlugin {
             EconomicStateManager.init(this);
             PricingManager.init(this);
             TransferManager.init(this);
+            
+            // LimitManager 依赖 ItemConfigManager，此时已安全
             limitAPI = new LimitManager(this);
 
             // 5. 核心业务注册 (动态注册适配 Paper)
@@ -118,7 +124,7 @@ public final class EcoBridge extends JavaPlugin {
 
             this.fullyInitialized.set(true);
             
-            // [Fix] 在所有加载完成后的最后一刻，一次性打印对齐完美的 Banner
+            // 打印 Banner
             printSummaryBanner();
 
         } catch (Throwable e) {
@@ -134,45 +140,16 @@ public final class EcoBridge extends JavaPlugin {
     }
 
     /**
-     * 初始化字节码转换器
+     * [新增] 安全的状态检查方法
+     * 用于防止异步任务(如 Caffeine 回调)在插件关闭后访问实例导致崩溃
      */
-    private void setupBytecodeTransformer() {
-        LogUtil.info("<aqua>正在注入 ASM 拦截器 (v1.6.2 Redirection)...</aqua>");
-        try {
-            Instrumentation inst = getInstrumentation();
-            if (inst != null) {
-                inst.addTransformer(new EcoShopTransformer(), true);
-                
-                // 处理 UltimateShop 的热加载逻辑接管
-                for (Class<?> clazz : inst.getAllLoadedClasses()) {
-                    if (clazz.getName().equals("cn.superiormc.ultimateshop.objects.buttons.ObjectItem")) {
-                        inst.retransformClasses(clazz);
-                        LogUtil.info("已完成对 ObjectItem (UltimateShop) 的动态逻辑重定向。");
-                        break;
-                    }
-                }
-                LogUtil.info("<green>✔ ASM 内核挂载成功。");
-            } else {
-                LogUtil.warn("未检测到 Instrumentation，建议检查 Agent 配置。");
-            }
-        } catch (Exception e) {
-            LogUtil.error("ASM 注入过程发生致命错误", e);
-        }
-    }
-
-    private Instrumentation getInstrumentation() {
-        try {
-            Class<?> agentClass = Class.forName("net.bytebuddy.agent.ByteBuddyAgent");
-            Method installMethod = agentClass.getMethod("install");
-            return (Instrumentation) installMethod.invoke(null);
-        } catch (Exception e) {
-            return null;
-        }
+    public static boolean isInitialized() {
+        return instance != null;
     }
 
     public static EcoBridge getInstance() {
         EcoBridge inst = instance;
-        if (inst == null) throw new IllegalStateException("EcoBridge has not been initialized.");
+        if (inst == null) throw new IllegalStateException("EcoBridge has not been initialized or is shutting down.");
         return inst;
     }
 
@@ -186,6 +163,17 @@ public final class EcoBridge extends JavaPlugin {
 
     public void setShadowMode(boolean enabled) {
         this.shadowMode.set(enabled);
+    }
+
+    // ========================================================================================
+    // 基础设施与生命周期管理
+    // ========================================================================================
+
+    private void bootstrapInfrastructure() {
+        DatabaseManager.init();
+        AsyncLogger.init(this);
+        HolidayManager.init();
+        RedisManager.init(this);
     }
 
     private void shutdownSequence() {
@@ -223,13 +211,6 @@ public final class EcoBridge extends JavaPlugin {
         sendConsole("<red>[EcoBridge] 系统资源回收完毕。");
     }
 
-    private void bootstrapInfrastructure() {
-        DatabaseManager.init();
-        AsyncLogger.init(this);
-        HolidayManager.init();
-        RedisManager.init(this);
-    }
-
     private void terminateVirtualPool() {
         if (virtualExecutor != null && !virtualExecutor.isShutdown()) {
             virtualExecutor.shutdown();
@@ -241,6 +222,39 @@ public final class EcoBridge extends JavaPlugin {
                 virtualExecutor.shutdownNow();
                 Thread.currentThread().interrupt();
             }
+        }
+    }
+
+    private void setupBytecodeTransformer() {
+        LogUtil.info("<aqua>正在注入 ASM 拦截器 (v1.6.2 Redirection)...</aqua>");
+        try {
+            Instrumentation inst = getInstrumentation();
+            if (inst != null) {
+                inst.addTransformer(new EcoShopTransformer(), true);
+                
+                for (Class<?> clazz : inst.getAllLoadedClasses()) {
+                    if (clazz.getName().equals("cn.superiormc.ultimateshop.objects.buttons.ObjectItem")) {
+                        inst.retransformClasses(clazz);
+                        LogUtil.info("已完成对 ObjectItem (UltimateShop) 的动态逻辑重定向。");
+                        break;
+                    }
+                }
+                LogUtil.info("<green>✔ ASM 内核挂载成功。");
+            } else {
+                LogUtil.warn("未检测到 Instrumentation，建议检查 Agent 配置。");
+            }
+        } catch (Exception e) {
+            LogUtil.error("ASM 注入过程发生致命错误", e);
+        }
+    }
+
+    private Instrumentation getInstrumentation() {
+        try {
+            Class<?> agentClass = Class.forName("net.bytebuddy.agent.ByteBuddyAgent");
+            Method installMethod = agentClass.getMethod("install");
+            return (Instrumentation) installMethod.invoke(null);
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -256,6 +270,7 @@ public final class EcoBridge extends JavaPlugin {
 
     private void registerListeners() {
         var pm = getServer().getPluginManager();
+        pm.registerEvents(this, this);
         pm.registerEvents(new CoinsEngineListener(this), this);
         pm.registerEvents(new CacheListener(), this);
     }
@@ -276,9 +291,6 @@ public final class EcoBridge extends JavaPlugin {
         }
     }
 
-    /**
-     * [Paper Adaption] 动态指令注册
-     */
     private void registerCommands() {
         try {
             Field commandMapField = Bukkit.getServer().getClass().getDeclaredField("commandMap");
@@ -328,7 +340,7 @@ public final class EcoBridge extends JavaPlugin {
     public void reload() {
         reloadConfig();
         
-        // [修复] 优先重载物品配置文件，确保后续组件能正确读取 items.yml
+        // [修复] 重载物品配置，确保最新 items.yml 被加载
         ItemConfigManager.reload();
         
         ConfigMigrator.checkAndMigrate(this);
@@ -338,15 +350,17 @@ public final class EcoBridge extends JavaPlugin {
         if (TransferManager.getInstance() != null) TransferManager.getInstance().loadConfig();
         if (limitAPI != null) limitAPI.reloadCache();
 
-        // [新增] 重载时自动再次同步商品数据
+        // [新增] 重载时自动再次同步 UltimateShop 数据
         if (getServer().getPluginManager().isPluginEnabled("UltimateShop")) {
             double defaultLambda = getConfig().getDouble("economy.default-lambda", 0.002);
             UltimateShopImporter.runImport(defaultLambda);
         }
         
-        // 重载时也打印一次 Banner
         printSummaryBanner();
     }
+
+    @EventHandler public void onJoin(PlayerJoinEvent event) { ActivityCollector.updateSnapshot(event.getPlayer()); }
+    @EventHandler public void onQuit(PlayerQuitEvent event) { ActivityCollector.removePlayer(event.getPlayer().getUniqueId()); }
 
     public ExecutorService getVirtualExecutor() { return virtualExecutor; }
     public static MiniMessage getMiniMessage() { return MM; }
