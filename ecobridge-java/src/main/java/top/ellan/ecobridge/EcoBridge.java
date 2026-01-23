@@ -27,7 +27,7 @@ import top.ellan.ecobridge.application.service.*;
 import top.ellan.ecobridge.infrastructure.persistence.redis.RedisManager;
 import top.ellan.ecobridge.infrastructure.persistence.storage.ActivityCollector;
 import top.ellan.ecobridge.infrastructure.persistence.storage.AsyncLogger;
-import top.ellan.ecobridge.manager.ItemConfigManager; // 确保导入
+import top.ellan.ecobridge.application.service.ItemConfigManager; // 确保导入
 import top.ellan.ecobridge.util.ConfigMigrator;
 import top.ellan.ecobridge.util.HolidayManager;
 import top.ellan.ecobridge.util.LogUtil;
