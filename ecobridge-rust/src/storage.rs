@@ -215,7 +215,8 @@ pub fn log_economy_event(ts: i64, uuid: String, delta: f64, balance: f64, meta: 
     }
 }
 
-fn writer_loop(conn: Connection, rx: Receiver<LogEvent>) {
+// [Fix] 增加 mut 关键字，允许传递可变引用
+fn writer_loop(mut conn: Connection, rx: Receiver<LogEvent>) {
     let mut buffer = Vec::with_capacity(1024);
     loop {
         match rx.recv() {
@@ -227,23 +228,26 @@ fn writer_loop(conn: Connection, rx: Receiver<LogEvent>) {
                         _ => break,
                     }
                 }
-                flush_buffer_to_db(&conn, &mut buffer);
+                // [Fix] 传入 &mut conn
+                flush_buffer_to_db(&mut conn, &mut buffer);
             }
             _ => break, 
         }
     }
     if !buffer.is_empty() {
-        flush_buffer_to_db(&conn, &mut buffer);
+        // [Fix] 传入 &mut conn
+        flush_buffer_to_db(&mut conn, &mut buffer);
     }
 }
 
-fn flush_buffer_to_db(conn: &Connection, buffer: &mut Vec<LogEvent>) {
+// [Fix] 签名修改：conn: &Connection -> conn: &mut Connection
+fn flush_buffer_to_db(conn: &mut Connection, buffer: &mut Vec<LogEvent>) {
     if buffer.is_empty() { return; }
 
     // [Optimization] 使用事务批量提交，解决单条插入性能瓶颈 (1k -> 50k rows/sec)
-    // 
     
-    // 1. 开启事务
+    
+    // 1. 开启事务 (现在可以成功调用，因为有了 &mut self)
     let tx = match conn.transaction() {
         Ok(t) => t,
         Err(_) => {
