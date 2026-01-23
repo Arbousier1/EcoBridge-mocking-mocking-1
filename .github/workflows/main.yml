@@ -112,8 +112,8 @@ jobs:
         run: |
           cd ecobridge-java
           chmod +x gradlew
-          # 这里会自动运行之前修复的 generateBindings 任务
-          ./gradlew shadowJar
+          # [关键修复] 添加 --refresh-dependencies 强制刷新依赖，解决 ZipException 损坏问题
+          ./gradlew shadowJar --refresh-dependencies
         env:
           ORG_GRADLE_PROJECT_version: ${{ github.ref_name }}
 
