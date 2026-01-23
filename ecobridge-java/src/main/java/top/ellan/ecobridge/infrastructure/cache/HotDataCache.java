@@ -13,21 +13,29 @@ import top.ellan.ecobridge.util.LogUtil;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 玩家数据热点缓存 (HotDataCache v0.9.2 - Shutdown Safe)
+ * 玩家数据热点缓存 (HotDataCache v0.9.3 - ClassLoader Safe)
  * 职责：维护在线玩家的高频交易数据快照，并实现专用的 IO 线程隔离。
  * 修复：
- * 1. [Fix] 修复 removalListener 在关机时调用 getInstance() 导致的崩溃。
- * 2. 优化：引入 EcoBridge.isInitialized() 检查，安全降级异步保存。
+ * 1. [Fix] 引入 AtomicBoolean isShutdown 标志位，防止 ClassLoader 关闭后 ForkJoinPool 仍尝试加载类导致的 zip file closed 崩溃。
+ * 2. 优化：关机时阻断 removalListener，改为完全由主线程同步遍历保存。
  */
 public class HotDataCache {
+
+    // [Fix] 关闭标志位，必须是原子变量以保证跨线程可见性
+    private static final AtomicBoolean isShutdown = new AtomicBoolean(false);
 
     private static final Cache<UUID, PlayerData> CACHE = Caffeine.newBuilder()
             .maximumSize(2000)
             .expireAfterAccess(Duration.ofHours(2))
             .removalListener((UUID uuid, PlayerData data, RemovalCause cause) -> {
+                // [Critical Fix] 如果已进入关机流程，直接终止！
+                // 防止 ForkJoinPool 线程在 ClassLoader 关闭后触发类加载
+                if (isShutdown.get()) return;
+
                 if (data == null) return;
                 // 只有非替换(例如过期、手动移除)才触发异步写回
                 // REPLACED 通常是数据刷新，不需要立即写库
@@ -43,6 +51,7 @@ public class HotDataCache {
      * 2. 在 Bukkit 主线程执行缓存挂载与 API 交互
      */
     public static void load(UUID uuid) {
+        if (isShutdown.get()) return; // 关机时不接受新加载
         DatabaseManager.getExecutor().execute(() -> {
             try {
                 // 阻塞型 IO：在平台线程池中执行
@@ -50,7 +59,7 @@ public class HotDataCache {
 
                 // 逻辑回调：切换回主线程处理 Bukkit 实体
                 // 检查插件状态，防止关机时调度报错
-                if (EcoBridge.isInitialized() && EcoBridge.getInstance().isEnabled()) {
+                if (EcoBridge.isInitialized() && EcoBridge.getInstance().isEnabled() && !isShutdown.get()) {
                     Bukkit.getScheduler().runTask(EcoBridge.getInstance(), () -> {
                         Player p = Bukkit.getPlayer(uuid);
                         if (p != null && p.isOnline()) {
@@ -68,6 +77,7 @@ public class HotDataCache {
     }
 
     public static PlayerData get(UUID uuid) {
+        if (isShutdown.get()) return null;
         return CACHE.getIfPresent(uuid);
     }
 
@@ -80,6 +90,9 @@ public class HotDataCache {
      * [Fix] 增加生命周期检查，防止在关机期间抛出 IllegalStateException
      */
     private static void saveAsync(UUID uuid, PlayerData data, String reason) {
+        // [Fast Fail] 如果已标记关闭，禁止提交新任务
+        if (isShutdown.get()) return;
+
         // 关键修复：先检查 EcoBridge 是否仍然活跃
         // 如果插件正在关闭 (isInitialized=false) 或已禁用 (isEnabled=false)
         // 则直接降级为同步保存，不再提交异步任务
@@ -119,27 +132,35 @@ public class HotDataCache {
     /**
      * 关机时的同步保存
      * 这里的逻辑必须极其健壮，不能依赖任何异步调度
+     * 必须在 onDisable() 中调用
      */
     public static void saveAllSync() {
+        // [Critical] 1. 立即设置关闭标志，阻断所有 removalListener 和 load/get 操作
+        if (isShutdown.getAndSet(true)) return;
+
         LogUtil.info("正在执行关机前的全量热数据强制同步...");
         
         // 获取当前所有数据的快照
         ConcurrentMap<UUID, PlayerData> snapshotMap = CACHE.asMap();
 
-        // 1. 手动遍历保存 (绕过 removalListener 的异步逻辑)
+        // 2. 手动遍历保存 (此时 removalListener 已被 isShutdown 屏蔽，不会冲突)
+        // 这一步在主线程执行，ClassLoader 依然可用，安全访问 HikariCP
+        int count = 0;
         for (var entry : snapshotMap.entrySet()) {
             try {
                 saveSyncInternal(entry.getKey(), entry.getValue());
+                count++;
             } catch (Exception e) {
                 LogUtil.error("关机保存失败: " + entry.getKey(), e);
             }
         }
 
-        // 2. 清空缓存
-        // 此时 removalListener 触发时，saveAsync 会检测到插件关闭而直接返回(或同步执行)
+        // 3. 清空缓存
+        // 此时触发的 removalListener 会在第一行被 return，不会导致 zip file closed
         CACHE.invalidateAll();
+        CACHE.cleanUp();
         
-        LogUtil.info("所有活跃数据已安全落盘。");
+        LogUtil.info("所有活跃数据已安全落盘 (共 " + count + " 条)。");
     }
 
     /**
