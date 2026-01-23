@@ -4,6 +4,7 @@ import top.ellan.ecobridge.infrastructure.persistence.database.DatabaseManager;
 import top.ellan.ecobridge.util.LogUtil;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.util.UUID;
 
 /**
@@ -41,7 +42,7 @@ public class TransactionJournal {
 
     /**
      * 第一步：开启事务 (写入磁盘)
-     * 这必须在任何扣款操作之前发生
+     * 这必须在任何扣款操作之前发生，记录完整的交易意图。
      */
     public static String beginTransaction(UUID sender, UUID receiver, double amount, double tax) {
         String txId = UUID.randomUUID().toString();
@@ -62,6 +63,30 @@ public class TransactionJournal {
         } catch (Exception e) {
             LogUtil.error("WAL 写入失败，交易已阻断", e);
             throw new RuntimeException("WAL_WRITE_FAILURE");
+        }
+    }
+
+    /**
+     * [新增] 强制确认 PENDING 状态 (WAL 检查点)
+     * 用于在执行关键操作前再次验证数据库连接，确保日志有效。
+     * 对应 TransferManager 中的调用。
+     */
+    public static void markPending(String txId) {
+        String sql = "UPDATE ecobridge_journal SET updated_at = ? WHERE tx_id = ? AND state = ?";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, System.currentTimeMillis());
+            stmt.setString(2, txId);
+            stmt.setInt(3, STATE_PENDING);
+            int rows = stmt.executeUpdate();
+            
+            if (rows == 0) {
+                // 如果更新行数为0，说明事务ID不存在或状态不正确，这是一个严重的一致性错误
+                throw new SQLException("Transaction not found or not pending: " + txId);
+            }
+        } catch (SQLException e) {
+            LogUtil.severe("WAL 检查点确认失败 (TxID: " + txId + ")", e);
+            throw new RuntimeException("WAL_CHECKPOINT_FAILURE", e);
         }
     }
 
