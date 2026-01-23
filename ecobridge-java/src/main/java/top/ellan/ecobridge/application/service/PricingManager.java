@@ -19,12 +19,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * 核心定价管理器 (PricingManager v3.2 - Final Integrated)
+ * 核心定价管理器 (PricingManager v3.2.1 - Hotfix: Lock Granularity)
  * <p>
  * 特性：
  * 1. [Thread Safe] 使用分段读写锁保护物品历史记录。
  * 2. [Global Sync] 集成 injectRemoteVolume 修复跨服热度不同步问题。
  * 3. [Macro Aware] 价格计算基于 PID 宏观快照。
+ * 4. [Deadlock Prevention] 异步 I/O 操作移出关键锁区域。
  */
 public class PricingManager {
 
@@ -182,34 +183,39 @@ public class PricingManager {
      * 当本服发生交易时调用
      */
     public void onTradeComplete(String productId, double effectiveAmount) {
+        long now = System.currentTimeMillis();
+        // 提前构建对象，减少锁内耗时
+        SaleRecord record = new SaleRecord(now, effectiveAmount);
+        
         var lock = getItemLock(productId).writeLock();
         lock.lock();
         try {
-            long now = System.currentTimeMillis();
-            
             // 1. 更新本地宏观热度 (Local Heat)
+            // 这是一个快速的内存操作，保留在锁内以保证状态一致性
             macroEngine.incrementTradeCounter(); 
 
             // 2. 更新历史记录 (Ring Buffer)
-            SaleRecord record = new SaleRecord(now, effectiveAmount);
             getHistoryContainer(productId).add(record, maxHistorySize);
 
-            // 3. 异步持久化 (Log & DB)
-            plugin.getVirtualExecutor().execute(() -> {
-                try {
-                    AsyncLogger.log(java.util.UUID.nameUUIDFromBytes(productId.getBytes()), effectiveAmount, 0, now, "TRX_WRITE_THROUGH");
-                    TransactionDao.saveSaleAsync(null, productId, effectiveAmount);
-                } catch (Exception e) {
-                    LogUtil.error("交易落库任务执行失败: " + productId, e);
-                }
-            });
-
-            // 4. 广播全服 (Redis)
-            if (RedisManager.getInstance() != null) {
-                RedisManager.getInstance().publishTrade(productId, effectiveAmount);
-            }
         } finally {
+            // 关键修改：尽早释放锁，避免阻塞后续的 I/O 操作
             lock.unlock();
+        }
+
+        // 3. 异步持久化 (Log & DB) - 移至锁外
+        // 即使 execute 阻塞或队列满，也不会卡住持有 productId 锁的线程
+        plugin.getVirtualExecutor().execute(() -> {
+            try {
+                AsyncLogger.log(java.util.UUID.nameUUIDFromBytes(productId.getBytes()), effectiveAmount, 0, now, "TRX_WRITE_THROUGH");
+                TransactionDao.saveSaleAsync(null, productId, effectiveAmount);
+            } catch (Exception e) {
+                LogUtil.error("交易落库任务执行失败: " + productId, e);
+            }
+        });
+
+        // 4. 广播全服 (Redis) - 移至锁外
+        if (RedisManager.getInstance() != null) {
+            RedisManager.getInstance().publishTrade(productId, effectiveAmount);
         }
     }
 

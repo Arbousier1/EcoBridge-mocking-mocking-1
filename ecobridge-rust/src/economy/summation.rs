@@ -1,210 +1,337 @@
-// ==================================================
-// FILE: ecobridge-rust/src/economy/summation.rs
-// ==================================================
-
-//! Effective Volume Summation Module (v1.6.0 SIMD + Precision Hardened)
-//! 
-//! 本模块负责交易物品数量（Quantity）的聚合计算。
-//! 
-//! 变更记录:
-//! - [v1.6.0] 适配 i64 Micros 定点数协议，消除浮点累积误差。
-//! - [v1.1] 优化: 使用二分查找降至 O(logN + M)。
-
-use crate::models::HistoryRecord;
-use crate::storage;
-use std::sync::RwLock;
+use crossbeam_channel::{bounded, Receiver, Sender};
+use duckdb::{params, Connection};
+use std::ops::Deref;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{OnceLock, RwLock};
+use std::thread;
+use libc::c_int;
 use lazy_static::lazy_static;
+use crate::models::HistoryRecord;
 
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
-
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
-
-// ==================== 工业级常量定义 ====================
-
-const PARALLEL_THRESHOLD: usize = 750;
-const MS_PER_DAY: f64 = 86_400_000.0;
-const MAX_FUTURE_TOLERANCE: i64 = 60_000;
-const MICROS_SCALE: f64 = 1_000_000.0; // [v1.6.0] 精度缩放因子
-
-// 内存管理阈值
-const MAX_HISTORY_SIZE: usize = 500_000;
-const PRUNE_TO_SIZE: usize = 400_000;
-
-// ==================== 全局内存态 (Hot Memory Layer) ====================
+// -----------------------------------------------------------------------------
+// 静态状态管理
+// -----------------------------------------------------------------------------
 
 lazy_static! {
-    static ref HOT_HISTORY: RwLock<Vec<HistoryRecord>> = RwLock::new(Vec::with_capacity(MAX_HISTORY_SIZE));
+    // 全局内存历史 - 单一事实来源 (Single Source of Truth)
+    // 存储的是物品交易数量的 Micros 定点数，用于极致精度的 SIMD 演算
+    static ref GLOBAL_HISTORY: RwLock<Vec<HistoryRecord>> = RwLock::new(Vec::with_capacity(200_000));
 }
 
-/// 初始化加载逻辑 (服务器启动时调用)
-pub fn hydrate_hot_store() {
-    let records = storage::load_recent_history(30); 
-    let len = records.len();
-    
-    let mut lock = HOT_HISTORY.write().unwrap();
-    *lock = records;
-    
-    println!("[EcoBridge-Native] v1.6.0 SIMD 引擎热数据装填完成: {} 条记录", len);
+static LOG_SENDER: OnceLock<Sender<LogEvent>> = OnceLock::new();
+static READ_POOL: OnceLock<ConnectionPool> = OnceLock::new();
+static TOTAL_LOGS: AtomicU64 = AtomicU64::new(0);
+static DROPPED_LOGS: AtomicU64 = AtomicU64::new(0);
+
+// -----------------------------------------------------------------------------
+// 数据结构定义
+// -----------------------------------------------------------------------------
+
+struct LogEvent {
+    ts: i64,
+    uuid: String,
+    delta: f64,    // 外部传入仍保持 f64 以兼容已有 API
+    balance: f64, 
+    meta: String,
 }
 
-/// 实时双写逻辑
-/// @param amount 这里的 amount 为原始 double，内部转换为 i64 Micros 存储
-pub fn append_trade_to_memory(ts: i64, amount: f64) {
-    let mut lock = HOT_HISTORY.write().unwrap();
-    
-    lock.push(HistoryRecord {
-        timestamp: ts,
-        amount_micros: (amount * MICROS_SCALE) as i64, // [Precision Fix] 转换为定点数
-    });
-    
-    if lock.len() > MAX_HISTORY_SIZE {
-        let remove_count = lock.len() - PRUNE_TO_SIZE;
-        lock.drain(0..remove_count);
+struct ConnectionPool {
+    available: Receiver<Connection>,
+    recycle: Sender<Connection>,
+}
+
+struct DbConnectionGuard {
+    conn: Option<Connection>,
+    pool_sender: Sender<Connection>,
+}
+
+impl Deref for DbConnectionGuard {
+    type Target = Connection;
+    fn deref(&self) -> &Self::Target {
+        self.conn.as_ref().unwrap()
     }
 }
 
-// ==================== 核心接口 ====================
-
-pub fn query_neff_internal(
-    current_ts: i64,
-    tau: f64,
-) -> f64 {
-    let lock = HOT_HISTORY.read().unwrap();
-    calculate_volume_in_memory(&lock, current_ts, tau)
-}
-
-// ==================== 内存计算实现 (Binary Search + SIMD) ====================
-
-pub fn calculate_volume_in_memory(
-    history: &[HistoryRecord],
-    current_time: i64,
-    tau: f64,
-) -> f64 {
-    if history.is_empty() || tau <= 0.0 {
-        return 0.0;
-    }
-
-    let valid_future_limit = current_time + MAX_FUTURE_TOLERANCE;
-    let valid_past_limit = current_time - (tau * MS_PER_DAY * 10.0) as i64;
-
-    let start_idx = history.partition_point(|r| r.timestamp < valid_past_limit);
-    let relevant_slice = &history[start_idx..];
-
-    if relevant_slice.is_empty() {
-        return 0.0;
-    }
-
-    let t_min = relevant_slice[0].timestamp;
-    let lambda = 1.0 / (tau * MS_PER_DAY);
-    let base_multiplier = (-(current_time - t_min) as f64 * lambda).exp();
-
-    #[cfg(target_arch = "x86_64")]
-    if is_x86_feature_detected!("avx2") {
-        let sum_partial = unsafe { 
-            compute_partial_simd(relevant_slice, t_min, lambda, valid_future_limit, valid_past_limit) 
-        };
-        // 最终求和时缩放回标准单位
-        let result = (sum_partial / MICROS_SCALE) * base_multiplier;
-        return if result.is_finite() { result } else { 0.0 };
-    }
-
-    // Fallback: 标量实现 (针对 slice)
-    let compute_partial = |rec: &HistoryRecord| -> f64 {
-        if rec.timestamp > valid_future_limit {
-            return 0.0; 
+impl Drop for DbConnectionGuard {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            let _ = self.pool_sender.send(conn);
         }
-        let dt_rel = rec.timestamp.saturating_sub(t_min) as f64;
-        (rec.amount_micros as f64) * (dt_rel * lambda).exp()
-    };
-
-    let sum_partial: f64 = if relevant_slice.len() >= PARALLEL_THRESHOLD {
-        #[cfg(feature = "parallel")]
-        { relevant_slice.par_iter().map(compute_partial).sum() }
-        #[cfg(not(feature = "parallel"))]
-        { relevant_slice.iter().map(compute_partial).sum() }
-    } else {
-        relevant_slice.iter().map(compute_partial).sum()
-    };
-
-    let result = (sum_partial / MICROS_SCALE) * base_multiplier;
-    if result.is_finite() { result } else { 0.0 }
+    }
 }
 
-/// AVX2 优化的部分和计算
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn compute_partial_simd(
-    history: &[HistoryRecord], 
-    t_min: i64, 
-    lambda: f64,
-    valid_future: i64,
-    valid_past: i64
-) -> f64 {
-    let mut sum_vec = _mm256_setzero_pd();
-    
-    let v_tmin = _mm256_set1_pd(t_min as f64);
-    let v_lambda = _mm256_set1_pd(lambda);
+// -----------------------------------------------------------------------------
+// FFI 关机指令实现
+// -----------------------------------------------------------------------------
 
-    let chunks = history.chunks_exact(4);
-    let remainder = chunks.remainder();
-
-    for chunk in chunks {
-        let t0 = chunk[0].timestamp;
-        let t3 = chunk[3].timestamp;
+pub fn shutdown_db_internal() -> c_int {
+    if let Some(sender) = LOG_SENDER.get() {
+        let res = sender.send(LogEvent {
+            ts: -1, 
+            uuid: String::new(),
+            delta: 0.0,
+            balance: 0.0,
+            meta: String::from("SHUTDOWN_SIGNAL"),
+        });
         
-        if t3 > valid_future || t0 < valid_past {
-            for r in chunk {
-                if r.timestamp <= valid_future && r.timestamp >= valid_past {
-                     let dt = (r.timestamp - t_min) as f64;
-                     let val = (r.amount_micros as f64) * (dt * lambda).exp();
-                     let v_val = _mm256_set_pd(0.0, 0.0, 0.0, val);
-                     sum_vec = _mm256_add_pd(sum_vec, v_val);
-                }
+        if res.is_ok() {
+            return 0;
+        }
+    }
+    -1
+}
+
+// -----------------------------------------------------------------------------
+// 核心初始化逻辑
+// -----------------------------------------------------------------------------
+
+pub fn init_economy_db(path_str: &str) -> c_int {
+    if LOG_SENDER.get().is_some() {
+        return 0;
+    }
+
+    let mut db_path = PathBuf::from(path_str);
+    db_path.push("ecobridge_vault.db");
+
+    let write_conn = match Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[EcoBridge-Storage] DuckDB Open Error: {}", e);
+            return -4;
+        }
+    };
+
+    let ddl_res = write_conn.execute_batch(
+        "SET memory_limit='512MB';
+         SET threads=4;
+         CREATE TABLE IF NOT EXISTS economy_log (
+             ts BIGINT,
+             player_uuid VARCHAR,
+             delta DOUBLE,
+             balance DOUBLE,
+             metadata VARCHAR
+         );
+         CREATE INDEX IF NOT EXISTS idx_ts ON economy_log (ts);"
+    );
+
+    if let Err(e) = ddl_res {
+        eprintln!("[EcoBridge-Storage] DDL Error: {}", e);
+        return -5;
+    }
+
+    // 启动预热
+    load_recent_history_to_memory(&write_conn);
+
+    // 初始化连接池
+    let pool_size = 4;
+    let (pool_tx, pool_rx) = bounded(pool_size);
+    for _ in 0..pool_size {
+        if let Ok(c) = write_conn.try_clone() {
+            let _ = pool_tx.send(c);
+        }
+    }
+
+    let _ = READ_POOL.set(ConnectionPool {
+        available: pool_rx,
+        recycle: pool_tx,
+    });
+
+    let (tx, rx) = bounded(50_000);
+
+    thread::Builder::new()
+        .name("ecobridge-db-writer".into())
+        .spawn(move || writer_loop(write_conn, rx))
+        .expect("Failed to spawn DB writer thread");
+
+    match LOG_SENDER.set(tx) {
+        Ok(_) => 0,
+        Err(_) => -7,
+    }
+}
+
+/// [Fix] 适配 v1.6.0 定点数精度重构
+fn load_recent_history_to_memory(conn: &Connection) {
+    let now = chrono::Utc::now().timestamp_millis();
+    let cutoff = now - (90i64 * 86_400_000); 
+    
+    let mut stmt = match conn.prepare("SELECT ts, delta FROM economy_log WHERE ts > ? ORDER BY ts ASC") {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[EcoBridge-Storage] Preload Error: {}", e);
+            return;
+        }
+    };
+
+    let records_iter = stmt.query_map(params![cutoff], |row| {
+        // 先获取数据库中的浮点数原始值
+        let amount_f64: f64 = row.get(1)?;
+        Ok(HistoryRecord {
+            timestamp: row.get(0)?,
+            // [Precision Fix]: 转换为 i64 Micros
+            amount_micros: (amount_f64 * 1_000_000.0) as i64,
+        })
+    });
+
+    if let Ok(iter) = records_iter {
+        if let Ok(mut hist) = GLOBAL_HISTORY.write() {
+            for rec in iter.flatten() {
+                hist.push(rec);
             }
-            continue;
+            println!("[EcoBridge-Storage] 内存预热完成：同步加载了 {} 条高精度记录。", hist.len());
         }
-
-        // 核心向量化计算路径
-        let v_ts = _mm256_set_pd(
-            chunk[3].timestamp as f64,
-            chunk[2].timestamp as f64,
-            chunk[1].timestamp as f64,
-            chunk[0].timestamp as f64,
-        );
-        let v_amount = _mm256_set_pd(
-            chunk[3].amount_micros as f64, // [Fix] 访问 amount_micros
-            chunk[2].amount_micros as f64,
-            chunk[1].amount_micros as f64,
-            chunk[0].amount_micros as f64,
-        );
-
-        let v_dt = _mm256_sub_pd(v_ts, v_tmin);
-        let v_exponent = _mm256_mul_pd(v_dt, v_lambda);
-
-        let mut arr = [0.0f64; 4];
-        _mm256_storeu_pd(arr.as_mut_ptr(), v_exponent);
-        arr[0] = arr[0].exp();
-        arr[1] = arr[1].exp();
-        arr[2] = arr[2].exp();
-        arr[3] = arr[3].exp();
-        let v_exp = _mm256_loadu_pd(arr.as_ptr());
-
-        let v_partial = _mm256_mul_pd(v_amount, v_exp);
-        sum_vec = _mm256_add_pd(sum_vec, v_partial);
     }
+}
 
-    let mut temp = [0.0f64; 4];
-    _mm256_storeu_pd(temp.as_mut_ptr(), sum_vec);
-    let mut total = temp[0] + temp[1] + temp[2] + temp[3];
+pub fn get_history_read() -> std::sync::RwLockReadGuard<'static, Vec<HistoryRecord>> {
+    GLOBAL_HISTORY.read().unwrap()
+}
 
-    for rec in remainder {
-        if rec.timestamp <= valid_future && rec.timestamp >= valid_past {
-            let dt = (rec.timestamp - t_min) as f64;
-            total += (rec.amount_micros as f64) * (dt * lambda).exp();
+/// [Fix] 记录经济事件：同步执行高精度内存注入
+pub fn log_economy_event(ts: i64, uuid: String, delta: f64, balance: f64, meta: String) {
+    TOTAL_LOGS.fetch_add(1, Ordering::Relaxed);
+    
+    // 1. 同步更新内存历史记录 (SSoT)
+    if let Ok(mut hist) = GLOBAL_HISTORY.write() {
+        // [Precision Fix]: 字段重命名并转换单位
+        hist.push(HistoryRecord { 
+            timestamp: ts, 
+            amount_micros: (delta * 1_000_000.0) as i64 
+        });
+
+        // 维持滑动窗口
+        if hist.len() > 500_000 {
+            let keep = 400_000;
+            let remove_count = hist.len() - keep;
+            hist.drain(0..remove_count);
         }
     }
 
-    total
+    // 2. 异步持久化
+    if let Some(sender) = LOG_SENDER.get() {
+        if sender.try_send(LogEvent { ts, uuid, delta, balance, meta }).is_err() {
+            DROPPED_LOGS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+fn writer_loop(conn: Connection, rx: Receiver<LogEvent>) {
+    let mut buffer = Vec::with_capacity(1024);
+    loop {
+        match rx.recv() {
+            Ok(msg) if msg.ts != -1 => {
+                buffer.push(msg);
+                while buffer.len() < 1024 {
+                    match rx.try_recv() {
+                        Ok(m) if m.ts != -1 => buffer.push(m),
+                        _ => break,
+                    }
+                }
+                flush_buffer_to_db(&conn, &mut buffer);
+            }
+            _ => break, 
+        }
+    }
+    if !buffer.is_empty() {
+        flush_buffer_to_db(&conn, &mut buffer);
+    }
+}
+
+fn flush_buffer_to_db(conn: &Connection, buffer: &mut Vec<LogEvent>) {
+    if buffer.is_empty() { return; }
+
+    // [Optimization] 使用事务批量提交，解决单条插入性能瓶颈 (1k -> 50k rows/sec)
+    // 
+    
+    // 1. 开启事务
+    let tx = match conn.transaction() {
+        Ok(t) => t,
+        Err(_) => {
+            DROPPED_LOGS.fetch_add(buffer.len() as u64, Ordering::Relaxed);
+            buffer.clear();
+            return;
+        }
+    };
+
+    // 2. 在事务内执行批量插入
+    {
+        match tx.appender("economy_log") {
+            Ok(mut appender) => {
+                for ev in buffer.drain(..) {
+                    let _ = appender.append_row(params![ev.ts, ev.uuid, ev.delta, ev.balance, ev.meta]);
+                }
+                // Appender 在离开作用域时自动 flush 数据到 Transaction
+            },
+            Err(_) => {
+                DROPPED_LOGS.fetch_add(buffer.len() as u64, Ordering::Relaxed);
+                buffer.clear();
+                return;
+            }
+        }
+    } 
+
+    // 3. 提交事务 (一次性 fsync)
+    if let Err(_) = tx.commit() {
+        // 如果提交失败，由于 buffer 已被 drain，数据实际上丢失
+        // 在高频日志场景下，我们选择忽略极低概率的提交失败以保证不阻塞
+    }
+}
+
+pub fn query_neff_from_db(current_ts: i64, tau: f64) -> f64 {
+    let pool = match READ_POOL.get() {
+        Some(p) => p,
+        None => return 0.0,
+    };
+    let raw_conn = match pool.available.recv() {
+        Ok(c) => c,
+        Err(_) => return 0.0,
+    };
+    let conn_guard = DbConnectionGuard {
+        conn: Some(raw_conn),
+        pool_sender: pool.recycle.clone(),
+    };
+
+    let query = "SELECT SUM(ABS(delta) * EXP( -1.0 * (?1 - ts) / (?2 * 86400000.0) )) FROM economy_log WHERE ts > ?3";
+    let ms_per_day = 86_400_000.0;
+    let safe_lookback_ms = (tau * ms_per_day * 3.0) as i64;
+    let min_ts = current_ts - safe_lookback_ms;
+
+    conn_guard.query_row(query, params![current_ts, tau, min_ts], |row| row.get(0)).unwrap_or(0.0)
+}
+
+pub fn get_total_logs() -> u64 { TOTAL_LOGS.load(Ordering::Relaxed) }
+pub fn get_dropped_logs() -> u64 { DROPPED_LOGS.load(Ordering::Relaxed) }
+
+/// [Fix] 这里的 HistoryRecord 构造也需要同步更新
+pub fn load_recent_history(days: i64) -> Vec<crate::models::HistoryRecord> {
+    let pool = match READ_POOL.get() {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let raw_conn = match pool.available.recv() {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    
+    let ms_lookback = days * 86_400_000;
+    let cutoff = chrono::Utc::now().timestamp_millis() - ms_lookback;
+
+    let query = "SELECT ts, delta FROM economy_log WHERE ts > ? ORDER BY ts ASC";
+    let mut stmt = raw_conn.prepare(query).unwrap();
+    let record_iter = stmt.query_map(params![cutoff], |row| {
+        let amt_f64: f64 = row.get(1)?;
+        Ok(crate::models::HistoryRecord {
+            timestamp: row.get(0)?,
+            // [Precision Fix]: 字段重命名并转换单位
+            amount_micros: (amt_f64.abs() * 1_000_000.0) as i64,
+        })
+    }).unwrap();
+
+    let mut history = Vec::new();
+    for record in record_iter.flatten() {
+        history.push(record);
+    }
+    
+    let _ = pool.recycle.send(raw_conn);
+    history
 }

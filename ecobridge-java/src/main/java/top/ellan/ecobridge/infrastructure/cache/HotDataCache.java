@@ -177,6 +177,7 @@ public class HotDataCache {
 
         public void updateFromTruth(double newBalance) {
             balanceBits.set(Double.doubleToRawLongBits(newBalance));
+            version.incrementAndGet();
         }
 
         public void setBalance(double newBalance) {
