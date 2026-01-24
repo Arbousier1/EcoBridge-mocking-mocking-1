@@ -16,17 +16,14 @@ import java.util.Collection;
 import java.util.List;
 
 /**
- * ASMBridge (v3.1 - Vault Specific Adapter)
- * 职责：仅拦截并修改 UltimateShop 中的 Vault (金币) 价格，保留其他自定义货币。
+ * ASMBridge (v3.2 - Hardened Formula Override)
+ * 职责：拦截并修改 UltimateShop 中的 Vault (金币) 价格。
+ * 加固：强制覆盖内部公式字符串，防止 UltimateShop 重新计算回原配置价格。
  */
 public class ASMBridge {
 
     private static volatile Field cachedListField = null;
-    private static volatile Field cachedValueField = null;
 
-    /**
-     * 核心逻辑：重定向复合价格中的金币部分
-     */
     public static ObjectPrices redirectPrice(ObjectItem item, ObjectPrices originalPrices, boolean isBuy) {
         try {
             if (item == null || originalPrices == null) return originalPrices;
@@ -36,18 +33,17 @@ public class ASMBridge {
             if ("unknown".equals(productId)) return originalPrices;
             productId = productId.toLowerCase();
 
-            // 2. 获取 EcoBridge 演算价格 (仅针对主货币金币)
+            // 2. 获取 EcoBridge 演算价格
             PricingManager pm = PricingManager.getInstance();
             if (pm == null) return originalPrices;
             double ecoPrice = isBuy ? pm.calculateBuyPrice(productId) : pm.calculateSellPrice(productId);
 
             // 3. 影子模式审计
             if (EcoBridge.getInstance().isShadowMode()) {
-                // 审计逻辑...
                 return originalPrices;
             }
 
-            // 4. 执行精准注入：仅修改 Vault 类型的价格条目
+            // 4. 执行精准注入
             modifyVaultOnly(originalPrices, ecoPrice);
 
             return originalPrices;
@@ -58,11 +54,7 @@ public class ASMBridge {
         }
     }
 
-    /**
-     * 深度遍历并过滤 Vault 价格条目
-     */
     private static void modifyVaultOnly(ObjectPrices prices, double newValue) throws Exception {
-        // 定位内部 List<ObjectPrice>
         if (cachedListField == null) {
             for (Field f : prices.getClass().getDeclaredFields()) {
                 if (Collection.class.isAssignableFrom(f.getType()) || List.class.isAssignableFrom(f.getType())) {
@@ -80,60 +72,53 @@ public class ASMBridge {
 
         for (Object priceObj : priceList) {
             if (priceObj == null) continue;
-
-            // --- 核心修复：类型过滤 ---
-            // UltimateShop 内部实现类通常叫 VaultPrice 或类似名称
             String className = priceObj.getClass().getSimpleName();
             
+            // 仅针对 Vault 价格进行深度覆写
             if (className.contains("Vault")) {
-                // 只有金币条目才会被 EcoBridge 的 PID 价格覆盖
                 updateSinglePriceObject(priceObj, newValue);
-                // LogUtil.debug("已同步 Vault 价格: " + newValue);
-            } else {
-                // 其他条目（如 PlayerPoints, ItemPrice）保持原样
-                // LogUtil.debug("忽略非 Vault 货币条目: " + className);
+            }
+        }
+    }
+
+    private static void updateSinglePriceObject(Object priceObj, double newValue) throws Exception {
+        Class<?> clazz = priceObj.getClass();
+        
+        // 遍历字段寻找数值容器 (ObjectNumber) 或直接的 value 字段
+        for (Field f : clazz.getDeclaredFields()) {
+            f.setAccessible(true);
+            
+            // 情况 A: 直接包含 value 字段 (旧版或简化版)
+            if ((f.getType() == double.class || f.getType() == Double.class) && f.getName().equals("value")) {
+                f.setDouble(priceObj, newValue);
+            }
+            // 情况 B: 包含 amount/price 等数值包装类 (通常叫 ObjectNumber)
+            else if (f.getType().getSimpleName().contains("Number")) {
+                Object numberObj = f.get(priceObj);
+                if (numberObj != null) {
+                    overwriteObjectNumber(numberObj, newValue);
+                }
             }
         }
     }
 
     /**
-     * 反射改写单个 ObjectPrice 内部的数值
+     * 核心加固逻辑：不仅修改 double 值，还修改 String 公式
      */
-    private static void updateSinglePriceObject(Object priceObj, double newValue) throws Exception {
-        // 探测该对象内部存储数值的字段
-        if (cachedValueField == null) {
-            Class<?> clazz = priceObj.getClass();
-            for (Field f : clazz.getDeclaredFields()) {
-                // 适配 double 字段或 ObjectNumber 包装类
-                if (f.getType() == double.class || f.getType() == Double.class || f.getName().equals("value")) {
-                    f.setAccessible(true);
-                    cachedValueField = f;
-                    break;
-                }
-                // 如果发现内部嵌套了数值包装类 (ObjectNumber)
-                if (f.getType().getSimpleName().contains("Number")) {
-                    f.setAccessible(true);
-                    Object numberObj = f.get(priceObj);
-                    if (numberObj != null) {
-                        updateSingleValue(numberObj, newValue);
-                        return;
-                    }
-                }
-            }
-        }
-
-        if (cachedValueField != null) {
-            cachedValueField.setDouble(priceObj, newValue);
-        }
-    }
-
-    private static void updateSingleValue(Object obj, double val) throws Exception {
-        // 递归进入数值包装对象修改真正的 double value
-        for (Field f : obj.getClass().getDeclaredFields()) {
+    private static void overwriteObjectNumber(Object numberObj, double val) throws Exception {
+        for (Field f : numberObj.getClass().getDeclaredFields()) {
+            f.setAccessible(true);
+            
+            // 1. 覆盖 double 值
             if (f.getType() == double.class || f.getType() == Double.class) {
-                f.setAccessible(true);
-                f.setDouble(obj, val);
-                return;
+                f.setDouble(numberObj, val);
+            }
+            // 2. 覆盖 String 公式 (防止重新解析)
+            // UltimateShop 通常将配置的公式字符串存在 String 类型的字段中 (如 'text', 'parse')
+            else if (f.getType() == String.class) {
+                // 将公式 "10*(...)" 强制替换为静态字符串 "15.5"
+                // 这样即使插件尝试重新解析公式，也只能解析出我们的静态值
+                f.set(numberObj, String.valueOf(val));
             }
         }
     }
