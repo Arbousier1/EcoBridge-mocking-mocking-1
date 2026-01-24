@@ -7,14 +7,14 @@ authors: [ Ellan ]
 description: "基于 Java 25 FFM + Rust 核心的 DDD 架构动态经济系统"
 website: "https://github.com/Ellan/EcoBridge"
 
-# Paper 现代依赖管理
+# Paper 现代依赖管理 (Paper 1.19.4+)
 dependencies:
   server:
     # 核心前置：必须在 EcoBridge 启动前准备就绪
     CoinsEngine:
       load: BEFORE
       required: true
-    nightcore:
+    nightcore: # 假设这是你使用的某些核心库
       load: BEFORE
       required: true
     UltimateShop:
@@ -32,6 +32,26 @@ dependencies:
       load: BEFORE
       required: false
 
+# 指令注册核心 (对应 Java 中的 getCommand)
+commands:
+  ecopay:
+    description: "通过 EcoBridge 发起受监管的转账"
+    usage: "用法: /ecopay <玩家> <金额>"
+    permission: ecobridge.command.transfer
+    aliases: # 智能别名：玩家输入 /pay 或 /transfer 也会触发此逻辑
+      - epay
+      - pay
+      - transfer
+  
+  ecoadmin:
+    description: "EcoBridge 核心管理指令"
+    usage: "用法: /ecoadmin <subcommand>"
+    permission: ecobridge.admin
+    aliases:
+      - eb
+      - eco
+      - ecobridge
+
 permissions:
   ecobridge.admin:
     description: "管理 EcoBridge 核心引擎及影子模式"
@@ -39,7 +59,7 @@ permissions:
   
   ecobridge.command.transfer:
     description: "使用受 Rust 内核监管的转账系统"
-    default: "true"
+    default: 'true'
 
   ecobridge.bypass.tax:
     description: "豁免由 Rust 内核计算的动态交易税"

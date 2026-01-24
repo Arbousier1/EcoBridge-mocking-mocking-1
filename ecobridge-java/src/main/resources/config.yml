@@ -18,7 +18,8 @@ database:
   port: 3306
   database: "ecobridge"
   username: "root"
-  password: "your_secure_password"
+  # 【⚠️需修改】请务必修改为你的实际数据库密码
+  password: "change_me_to_real_password"
   # 办事窗口：建议设为 (CPU核心数 * 2) + 1。
   pool-size: 15
 
@@ -59,6 +60,7 @@ economy:
     capacity-per-user: 5000.0
 
   # [减震器 (PID)] - 让物价不要像过山车一样乱跳
+  # PID 控制器通过这三个参数来平滑价格曲线，避免因单一玩家大量交易导致价格崩盘。
   pid:
     kp: 0.4   # 弹性：对现在买卖的反应。
     ki: 0.08  # 稳性：对长期偏离基准价的纠正。
@@ -68,7 +70,7 @@ economy:
   environment:
     seasonal-amplitude: 0.15 # 季节性涨跌：模拟物价随日历波动。
     weekend-multiplier: 1.2  # 周末乘数：周末人多，价格自动上浮。
-    newbie-protection: 0.2  # 新手保护：让新人买卖更便宜，老玩家更贵。
+    newbie-protection: 0.2   # 新手保护：让新人买卖更便宜，老玩家更贵。
 
   # [风控与转账税] - 警察系统
   audit-settings:
@@ -89,9 +91,9 @@ economy:
 
     # [个人限额] - 防止脚本把商店卖空
     # 额度 = 基础额度 + (增长系数 * 根号下在线时长)
-    default-base-limit: 2364.0   # 新人初始只能买卖 64 个。
-    default-growth-rate: 16.0  # 玩得越久，商店给的额度越高。
-    default-max-limit: 4728.0   # 最终限额天花板。
+    default-base-limit: 2364.0   # 新人初始基础交易限额（约等于一背包物品）。
+    default-growth-rate: 16.0    # 玩得越久，商店给的额度越高。
+    default-max-limit: 4728.0    # 最终限额天花板（约等于两背包物品）。
 
 # [外部 API]
 holiday-api:

@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * 智能转账指令 (TransferCommand v0.6.2 - Precision Fixed)
+ * 智能转账指令 (TransferCommand v0.6.3 - UX Polish)
  * 职责：指令解析、权限验证、Tab 补全，并驱动 TransferManager 进入风控审计流。
  * 修复：使用 BigDecimal 统一金额精度，防止浮点数陷阱。
  */
@@ -114,6 +114,8 @@ public class TransferCommand implements TabExecutor {
             String input = args[0].toLowerCase();
             return Bukkit.getOnlinePlayers().stream()
                 .map(Player::getName)
+                // [UX 优化] 过滤掉玩家自己，防止误选
+                .filter(name -> !name.equalsIgnoreCase(sender.getName()))
                 .filter(name -> name.toLowerCase().startsWith(input))
                 .collect(Collectors.toList());
         }

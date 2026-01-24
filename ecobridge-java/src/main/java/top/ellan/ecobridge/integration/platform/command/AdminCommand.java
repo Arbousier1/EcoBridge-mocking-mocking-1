@@ -17,19 +17,24 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * EcoBridge 管理指令
+ * EcoBridge 管理指令 (v1.2.0 - Secured)
  * 职责：
  * 1. 切换影子模式与重载配置。
  * 2. 强制设置商品基准价 (setprice)。
  * 3. 重置商品经济数据 (reset)。
  * 4. 从 UltimateShop 导入商品数据 (import)。
+ * * 修复：
+ * - [Security] 修复了 Tab 补全的权限泄露问题。
+ * - [Fix] 增加了配置读取的空指针防御。
  */
 public class AdminCommand implements TabExecutor {
 
+    private static final String PERMISSION = "ecobridge.admin";
+
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
-        if (!sender.hasPermission("ecobridge.admin")) {
-            sender.sendMessage(EcoBridge.getMiniMessage().deserialize("<red>权限不足: 需要 ecobridge.admin"));
+        if (!sender.hasPermission(PERMISSION)) {
+            sender.sendMessage(EcoBridge.getMiniMessage().deserialize("<red>权限不足: 需要 " + PERMISSION));
             return true;
         }
 
@@ -59,7 +64,9 @@ public class AdminCommand implements TabExecutor {
                     String setPid = args[1];
                     try {
                         double newPrice = Double.parseDouble(args[2]);
-                        if (newPrice < 0) throw new NumberFormatException();
+                        if (newPrice < 0 || Double.isInfinite(newPrice) || Double.isNaN(newPrice)) {
+                            throw new NumberFormatException();
+                        }
                         ItemConfigManager.updateItemBasePrice(setPid, newPrice);
                         sender.sendMessage(EcoBridge.getMiniMessage().deserialize(
                             "<green>成功！已将 <white>" + setPid + "</white> 的基准价强制设为 <yellow>" + newPrice + "</yellow> 并同步至磁盘。"
@@ -76,10 +83,13 @@ public class AdminCommand implements TabExecutor {
                     }
                     String resetPid = args[1];
                     if (PricingManager.getInstance() != null) {
+                        // 触发一次 0 数额交易通常用于重置或重新计算，具体取决于 PricingManager 实现
                         PricingManager.getInstance().onTradeComplete(resetPid, 0.0);
                         sender.sendMessage(EcoBridge.getMiniMessage().deserialize(
                             "<green>已重置商品 <white>" + resetPid + "</white> 的波动计数。价格将回归基准价。"
                         ));
+                    } else {
+                        sender.sendMessage(EcoBridge.getMiniMessage().deserialize("<red>错误: 定价引擎尚未初始化。"));
                     }
                     return true;
 
@@ -110,6 +120,11 @@ public class AdminCommand implements TabExecutor {
 
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String alias, @NotNull String[] args) {
+        // [Security Fix] 只有拥有管理员权限的玩家才能看到补全
+        if (!sender.hasPermission(PERMISSION)) {
+            return Collections.emptyList();
+        }
+
         if (args.length == 1) {
             return List.of("setprice", "reset", "shadow", "reload", "import").stream()
                 .filter(s -> s.startsWith(args[0].toLowerCase()))
@@ -117,6 +132,9 @@ public class AdminCommand implements TabExecutor {
         }
 
         if (args.length == 2 && (args[0].equalsIgnoreCase("setprice") || args[0].equalsIgnoreCase("reset"))) {
+            // [NPE Fix] 增加 null 检查，防止配置文件未加载时报错
+            if (ItemConfigManager.get() == null) return Collections.emptyList();
+            
             ConfigurationSection section = ItemConfigManager.get().getConfigurationSection("item-settings");
             if (section != null) {
                 List<String> ids = new ArrayList<>();
