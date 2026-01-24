@@ -13,7 +13,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Transaction Data Access Object (TransactionDao v0.8.11-Hotfix)
+ * Transaction Data Access Object (TransactionDao v0.8.12-Hotfix)
  * <p>
  * Responsibilities:
  * 1. SSoT (Single Source of Truth) retrieval and persistence for player assets.
@@ -75,14 +75,26 @@ public class TransactionDao {
         int maxRetries = 3; // Maximum retries
         SQLException lastEx = null;
 
+        // [Fix Start] 新增变量：用于在重试循环中传递从数据库获取的正确版本号
+        long nextVersionOverride = -2; 
+
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
             // Get current version from cache
             PlayerData cached = HotDataCache.get(uuid);
-            long currentVersion = (cached != null) ? cached.getVersion() : -1;
+            
+            // [Fix Start] 优先使用 Override 版本（解决缓存为空时的版本丢失问题）
+            long currentVersion;
+            if (nextVersionOverride != -2) {
+                currentVersion = nextVersionOverride;
+            } else {
+                currentVersion = (cached != null) ? cached.getVersion() : -1;
+            }
+            // [Fix End]
 
             try (Connection conn = DatabaseManager.getConnection()) {
                 // 1. If no local version (or new player), try insert
-                if (currentVersion == -1) {
+                // [Fix] 增加检查：只有在没有 Override 版本时才尝试插入
+                if (currentVersion == -1 && nextVersionOverride == -2) {
                     try (PreparedStatement ipstmt = conn.prepareStatement(insertSql)) {
                         ipstmt.setString(1, uuid.toString());
                         ipstmt.setDouble(2, balance);
@@ -110,6 +122,10 @@ public class TransactionDao {
                 // 3. Update failed (version mismatch, concurrent modification occurred)
                 // Reload latest data from database
                 PlayerData fresh = loadPlayerData(uuid);
+                
+                // [Fix Start] 关键修复：无论缓存是否存在，都保存最新版本号供下一次循环使用
+                nextVersionOverride = fresh.getVersion();
+                // [Fix End]
                 
                 if (cached != null) {
                     // [CRITICAL FIX] Sync BOTH Version AND Balance
@@ -210,9 +226,9 @@ public class TransactionDao {
         // Build placeholders for IN clause
         String placeholders = String.join(",", Collections.nCopies(productIds.size(), "?"));
         String sql = "SELECT product_id, AVG(ABS(amount)) as avg_amount FROM ecobridge_sales " +
-                     "WHERE product_id IN (" + placeholders + ") " +
-                     "AND timestamp > ? " +
-                     "GROUP BY product_id";
+                      "WHERE product_id IN (" + placeholders + ") " +
+                      "AND timestamp > ? " +
+                      "GROUP BY product_id";
         
         long cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(7);
         

@@ -17,11 +17,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import static java.lang.foreign.ValueLayout.*;
 
 /**
- * NativeBridge (Core v1.7.0 - Layouts Restored)
+ * NativeBridge (Core v1.7.0 - Layouts Restored & Arena Safety Fix)
  * <p>
  * 修复日志:
  * 1. [Fix] 恢复 public static class Layouts，解决 TransferManager 和 PriceComputeEngine 的编译错误。
  * 2. [Bridge] Layouts 类现在作为代理，直接指向 jextract 生成的 Layout。
+ * 3. [Safety] 审计所有 FFM 调用，确保跨线程场景使用 ofConfined()，防止 IllegalStateException。
  */
 public class NativeBridge {
 
@@ -321,6 +322,7 @@ public class NativeBridge {
             MemoryConsumer ctxFiller,
             MemoryConsumer cfgFiller) {
         
+        // [修复] 在异步任务中使用 Arena.ofConfined()，确保线程安全且不混用 SharedArena
         return CompletableFuture.supplyAsync(() -> executeSafely(() -> {
             try (Arena threadArena = Arena.ofConfined()) {
                 // [Fix] 使用 jextract 生成的 layout()

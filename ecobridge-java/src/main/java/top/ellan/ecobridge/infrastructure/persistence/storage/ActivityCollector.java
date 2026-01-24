@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 修复日志：
  * 1. [Fix] 增加 PlayerJoinEvent 监听器 (LOWEST 优先级)，确保玩家进服瞬间立即建立缓存。
  * 2. [Fix] 解决异步任务在缓存未命中时获取到错误的“新手状态”问题。
+ * 3. [Fix] 将 startHeartbeat 暴露为 public，供主类调用。
  */
 public final class ActivityCollector {
 
@@ -113,7 +114,8 @@ public final class ActivityCollector {
         SNAPSHOT_CACHE.remove(uuid);
     }
 
-    private static void startHeartbeat(@NotNull EcoBridge plugin) {
+    // [修复点] 将 private 改为 public
+    public static void startHeartbeat(@NotNull EcoBridge plugin) {
         // 每 2 分钟 (2400 ticks) 同步一次所有在线玩家数据
         Bukkit.getScheduler().runTaskTimer(plugin, () -> {
             for (Player player : Bukkit.getOnlinePlayers()) {

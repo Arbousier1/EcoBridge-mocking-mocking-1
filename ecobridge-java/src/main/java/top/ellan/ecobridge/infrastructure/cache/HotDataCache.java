@@ -13,21 +13,29 @@ import top.ellan.ecobridge.util.LogUtil;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 玩家数据热点缓存 (HotDataCache v0.9.1 - Concurrency & Safety Fix)
+ * 玩家数据热点缓存 (HotDataCache v0.9.3 - ClassLoader Safe)
  * 职责：维护在线玩家的高频交易数据快照，并实现专用的 IO 线程隔离。
  * 修复：
- * 1. PlayerData.version 升级为 AtomicLong，确保乐观锁在高并发下的原子性。
- * 2. 优化关机同步逻辑，防止 JVM 退出时异步任务丢失。
+ * 1. [Fix] 引入 AtomicBoolean isShutdown 标志位，防止 ClassLoader 关闭后 ForkJoinPool 仍尝试加载类导致的 zip file closed 崩溃。
+ * 2. 优化：关机时阻断 removalListener，改为完全由主线程同步遍历保存。
  */
 public class HotDataCache {
+
+    // [Fix] 关闭标志位，必须是原子变量以保证跨线程可见性
+    private static final AtomicBoolean isShutdown = new AtomicBoolean(false);
 
     private static final Cache<UUID, PlayerData> CACHE = Caffeine.newBuilder()
             .maximumSize(2000)
             .expireAfterAccess(Duration.ofHours(2))
             .removalListener((UUID uuid, PlayerData data, RemovalCause cause) -> {
+                // [Critical Fix] 如果已进入关机流程，直接终止！
+                // 防止 ForkJoinPool 线程在 ClassLoader 关闭后触发类加载
+                if (isShutdown.get()) return;
+
                 if (data == null) return;
                 // 只有非替换(例如过期、手动移除)才触发异步写回
                 // REPLACED 通常是数据刷新，不需要立即写库
@@ -43,21 +51,25 @@ public class HotDataCache {
      * 2. 在 Bukkit 主线程执行缓存挂载与 API 交互
      */
     public static void load(UUID uuid) {
+        if (isShutdown.get()) return; // 关机时不接受新加载
         DatabaseManager.getExecutor().execute(() -> {
             try {
                 // 阻塞型 IO：在平台线程池中执行
                 PlayerData data = TransactionDao.loadPlayerData(uuid);
 
                 // 逻辑回调：切换回主线程处理 Bukkit 实体
-                Bukkit.getScheduler().runTask(EcoBridge.getInstance(), () -> {
-                    Player p = Bukkit.getPlayer(uuid);
-                    if (p != null && p.isOnline()) {
-                        CACHE.put(uuid, data);
-                        LogUtil.debug("已为玩家 " + p.getName() + " 完成数据挂载 (Version: " + data.getVersion() + ")");
-                    } else {
-                        LogUtil.debug("拦截到过时加载回调 (" + uuid + ")，玩家已离线。");
-                    }
-                });
+                // 检查插件状态，防止关机时调度报错
+                if (EcoBridge.isInitialized() && EcoBridge.getInstance().isEnabled() && !isShutdown.get()) {
+                    Bukkit.getScheduler().runTask(EcoBridge.getInstance(), () -> {
+                        Player p = Bukkit.getPlayer(uuid);
+                        if (p != null && p.isOnline()) {
+                            CACHE.put(uuid, data);
+                            LogUtil.debug("已为玩家 " + p.getName() + " 完成数据挂载 (Version: " + data.getVersion() + ")");
+                        } else {
+                            LogUtil.debug("拦截到过时加载回调 (" + uuid + ")，玩家已离线。");
+                        }
+                    });
+                }
             } catch (Exception e) {
                 LogUtil.error("玩家 " + uuid + " 数据热加载发生致命错误！", e);
             }
@@ -65,6 +77,7 @@ public class HotDataCache {
     }
 
     public static PlayerData get(UUID uuid) {
+        if (isShutdown.get()) return null;
         return CACHE.getIfPresent(uuid);
     }
 
@@ -73,16 +86,28 @@ public class HotDataCache {
     }
 
     /**
-     * 异步回写逻辑
-     * 显式使用 DatabaseManager.getExecutor() 以保护虚拟线程载体池
+     * 异步回写逻辑 (安全版)
+     * [Fix] 增加生命周期检查，防止在关机期间抛出 IllegalStateException
      */
     private static void saveAsync(UUID uuid, PlayerData data, String reason) {
-        // 如果插件正在关闭，直接同步执行以防止任务丢失
-        if (!EcoBridge.getInstance().isEnabled()) {
-            saveSyncInternal(uuid, data);
+        // [Fast Fail] 如果已标记关闭，禁止提交新任务
+        if (isShutdown.get()) return;
+
+        // 关键修复：先检查 EcoBridge 是否仍然活跃
+        // 如果插件正在关闭 (isInitialized=false) 或已禁用 (isEnabled=false)
+        // 则直接降级为同步保存，不再提交异步任务
+        if (!EcoBridge.isInitialized() || !EcoBridge.getInstance().isEnabled()) {
+            try {
+                saveSyncInternal(uuid, data);
+            } catch (Exception e) {
+                // 此时 LogUtil 可能也不安全了，直接用 System.err 做最后挣扎
+                System.err.println("[EcoBridge-Emergency] 关机同步保存失败: " + uuid);
+                e.printStackTrace();
+            }
             return;
         }
 
+        // 插件正常运行中，提交到数据库线程池
         DatabaseManager.getExecutor().execute(() -> {
             try {
                 saveSyncInternal(uuid, data);
@@ -101,38 +126,41 @@ public class HotDataCache {
     private static void saveSyncInternal(UUID uuid, PlayerData data) {
         // 使用 version 进行乐观锁更新 (需 TransactionDao 配合检查)
         TransactionDao.updateBalanceBlocking(uuid, data.getBalance());
-        // 这里假设 updateBalanceBlocking 会在成功后增加 version，
-        // 实际上 DAO 应该返回新 version，这里简化处理
         data.incrementVersion();
     }
 
     /**
      * 关机时的同步保存
      * 这里的逻辑必须极其健壮，不能依赖任何异步调度
+     * 必须在 onDisable() 中调用
      */
     public static void saveAllSync() {
+        // [Critical] 1. 立即设置关闭标志，阻断所有 removalListener 和 load/get 操作
+        if (isShutdown.getAndSet(true)) return;
+
         LogUtil.info("正在执行关机前的全量热数据强制同步...");
         
         // 获取当前所有数据的快照
         ConcurrentMap<UUID, PlayerData> snapshotMap = CACHE.asMap();
 
-        // 1. 先从缓存中移除所有数据，这将触发 removalListener
-        // 但由于我们在 saveAsync 中加了 isEnabled() 检查，此时它会降级为同步保存
-        // 为了双重保险，我们先手动遍历保存
-        
+        // 2. 手动遍历保存 (此时 removalListener 已被 isShutdown 屏蔽，不会冲突)
+        // 这一步在主线程执行，ClassLoader 依然可用，安全访问 HikariCP
+        int count = 0;
         for (var entry : snapshotMap.entrySet()) {
             try {
                 saveSyncInternal(entry.getKey(), entry.getValue());
+                count++;
             } catch (Exception e) {
                 LogUtil.error("关机保存失败: " + entry.getKey(), e);
             }
         }
 
-        // 2. 清空缓存 (避免内存泄漏，虽然 JVM 马上要关了)
-        // 此时 removalListener 可能会再次触发，但 saveAsync 里的检查会防止重复提交异步任务
+        // 3. 清空缓存
+        // 此时触发的 removalListener 会在第一行被 return，不会导致 zip file closed
         CACHE.invalidateAll();
+        CACHE.cleanUp();
         
-        LogUtil.info("所有活跃数据已安全落盘。");
+        LogUtil.info("所有活跃数据已安全落盘 (共 " + count + " 条)。");
     }
 
     /**
@@ -142,7 +170,6 @@ public class HotDataCache {
         private final UUID uuid;
         // 使用 AtomicLong 存储 Double 的位模式，保证余额读写的原子性
         private final AtomicLong balanceBits;
-        // [Fix] 使用 AtomicLong 保证版本号递增的原子性，修复伪乐观锁问题
         private final AtomicLong version;
 
         public PlayerData(UUID uuid, double initialBalance, long initialVersion) {
@@ -171,6 +198,7 @@ public class HotDataCache {
 
         public void updateFromTruth(double newBalance) {
             balanceBits.set(Double.doubleToRawLongBits(newBalance));
+            version.incrementAndGet();
         }
 
         public void setBalance(double newBalance) {

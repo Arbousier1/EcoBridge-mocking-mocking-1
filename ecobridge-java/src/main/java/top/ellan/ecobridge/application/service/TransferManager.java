@@ -12,7 +12,7 @@ import org.bukkit.entity.Player;
 import su.nightexpress.coinsengine.api.CoinsEngineAPI;
 import su.nightexpress.coinsengine.api.currency.Currency;
 import top.ellan.ecobridge.EcoBridge;
-import top.ellan.ecobridge.application.context.TransactionContext; // [新增导入]
+import top.ellan.ecobridge.application.context.TransactionContext;
 import top.ellan.ecobridge.infrastructure.ffi.bridge.NativeBridge;
 import top.ellan.ecobridge.infrastructure.ffi.model.NativeTransferResult;
 import top.ellan.ecobridge.infrastructure.persistence.redis.RedisManager;
@@ -36,11 +36,11 @@ import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * 智能转账管理器 (TransferManager v1.7.3 - Context Aware)
+ * 智能转账管理器 (TransferManager v1.7.4 - Panic Safe & WAL)
  * <p>
  * 修复日志:
- * 1. [Fix] 引入 TransactionContext 以配合监听器区分市场行为。
- * 2. [Refactor] 移除 recordTradeVolume 手动调用，防止双重计数。
+ * 1. [Safety] 增加 CODE_PANIC (101) 处理，Rust 崩溃时自动降级。
+ * 2. [Consistency] 引入 WAL 模式 (markPending)，确保资金扣除前日志已落盘。
  */
 public class TransferManager {
 
@@ -51,6 +51,9 @@ public class TransferManager {
 
     private static final String BYPASS_TAX_PERMISSION = "ecobridge.bypass.tax";
     private static final String BYPASS_BLOCK_PERMISSION = "ecobridge.bypass.block";
+
+    // Rust Panic 错误码 (对应 Rust 层的 EconStatus::Panic)
+    private static final int CODE_PANIC = 101;
 
     private final Cache<UUID, VelocityTracker> velocityCache;
     private final ReentrantLock updateLock = new ReentrantLock();
@@ -155,7 +158,7 @@ public class TransferManager {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (shouldTriggerFallback(result)) {
                     if (plugin.getConfig().getBoolean("economy.fallback-mode", true)) {
-                        LogUtil.warn("Native 内核无响应或崩溃，切换至安全降级模式执行交易。");
+                        LogUtil.warn("Native 内核无响应或发生 Panic (Code 101)，切换至安全降级模式执行交易。");
                         NativeTransferResult fallbackResult = new NativeTransferResult(amount * 0.05, false, 0);
                         executeSettlement(sender, receiver, currency, amount, fallbackResult);
                     } else {
@@ -169,7 +172,10 @@ public class TransferManager {
     }
 
     private boolean shouldTriggerFallback(NativeTransferResult result) {
-        return result.warningCode() == -1 || (result.isBlocked() && result.warningCode() == 0); 
+        // [Fix] 增加 Rust Panic (101) 检测
+        return result.warningCode() == -1 
+            || result.warningCode() == CODE_PANIC 
+            || (result.isBlocked() && result.warningCode() == 0); 
     }
 
     public NativeTransferResult previewTransaction(Player player, double amount) {
@@ -267,6 +273,10 @@ public class TransferManager {
         boolean creditSuccess = false;
 
         try {
+            // [Fix] WAL 核心: 在操作资金前强制标记日志为 Pending 状态
+            // 这保证了 "①③ 之间崩溃" 时，日志已存在，可用于后续对账
+            TransactionJournal.markPending(txId);
+
             // [Fix] 开启交易上下文，标记为市场行为
             TransactionContext.setMarketTrade(true);
 
@@ -411,6 +421,7 @@ public class TransferManager {
             case NativeBridge.CODE_BLOCK_INSUFFICIENT_FUNDS -> "账户余额校验失败 (FFI)";
             case NativeBridge.CODE_BLOCK_VELOCITY_LIMIT -> "资金流量异常 (洗钱嫌疑)";
             case NativeBridge.CODE_BLOCK_QUANTITY_LIMIT -> "触发动态限额 (市场保护)";
+            case NativeBridge.CODE_BLOCK_VELOCITY_LIMIT + 10000 -> "内部算力错误"; // Fallback for some offset codes
             default -> "违反金融合规协议";
         };
         sender.sendMessage(EcoBridge.getMiniMessage().deserialize(

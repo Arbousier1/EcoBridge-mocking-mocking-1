@@ -23,8 +23,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 分布式同步管理器 v2.3 (Windows-WSL 桥接优化版)
- * 修复：JedisPool 构造函数适配、TCP_NODELAY 优化、Jackson 3.x 序列化
+ * 分布式同步管理器 v2.3.1 (Hotfix: No-Drop Queue)
+ * 修复：队列扩容至 100k，并引入虚拟线程背压机制，防止高峰期消息丢失。
  */
 public class RedisManager {
 
@@ -42,7 +42,9 @@ public class RedisManager {
     private final int port;
 
     private final AtomicBoolean active = new AtomicBoolean(false);
-    private final LinkedBlockingDeque<TradePacket> offlineQueue = new LinkedBlockingDeque<>(10000);
+    
+    // [Fix 1] 扩容队列至 100,000 以应对流量尖峰
+    private final LinkedBlockingDeque<TradePacket> offlineQueue = new LinkedBlockingDeque<>(100000);
     private final AtomicBoolean isFlushing = new AtomicBoolean(false);
     
     private final AtomicLong lastTransferLatency = new AtomicLong(0);
@@ -116,6 +118,7 @@ public class RedisManager {
     public CompletableFuture<Void> publishTrade(String productId, double amount) {
         if (!enabled || !active.get()) return CompletableFuture.completedFuture(null);
 
+        // [Info] 这里的 runAsync 使用的是 VirtualExecutor，支持轻量级阻塞
         return CompletableFuture.runAsync(() -> {
             TradePacket packet = new TradePacket(serverId, productId, amount, System.currentTimeMillis());
             offerToQueue(packet);
@@ -124,9 +127,15 @@ public class RedisManager {
     }
 
     private void offerToQueue(TradePacket packet) {
-        if (!offlineQueue.offer(packet)) {
-            offlineQueue.poll();
-            offlineQueue.offer(packet);
+        try {
+            // [Fix 2] 背压机制 (Backpressure)
+            // 不再丢弃旧消息 (offlineQueue.poll())。
+            // 由于使用了虚拟线程，当队列满 (100k) 时，put() 会安全阻塞当前虚拟线程，
+            // 直到队列有空间。这比丢弃数据更安全，且不会阻塞物理 OS 线程。
+            offlineQueue.put(packet);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LogUtil.error("Redis 队列写入被中断: " + packet.productId, e);
         }
     }
 
