@@ -1,10 +1,13 @@
 package top.ellan.ecobridge.application.service;
 
 import org.bukkit.Bukkit;
+import org.bukkit.configuration.file.YamlConfiguration; // [新增]
 import top.ellan.ecobridge.EcoBridge;
 import top.ellan.ecobridge.infrastructure.ffi.bridge.NativeBridge;
 import top.ellan.ecobridge.util.LogUtil;
 
+import java.io.File; // [新增]
+import java.io.IOException; // [新增]
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -13,17 +16,20 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * 宏观经济管理器 (EconomyManager v1.6.0 - Precision & Micros Fixed)
+ * 宏观经济管理器 (EconomyManager v1.6.1 - Data Separation)
  * <p>
  * 核心优化：
- * 1. [Precision] 全量采用 i64 Micros (10^-6) 存储核心经济指标，消除浮点累积误差。
- * 2. [Concurrency] 使用 LongAdder 代替 DoubleAdder 提升超高频交易下的累加性能。
- * 3. [FFI Alignment] 与 Rust 核心通信时进行动态缩放，确保算法输入的单位一致性。
+ * 1. [IO Safety] 将动态热度数据(economy-heat)分离至 data.yml，防止 config.yml 注释丢失。
+ * 2. [Precision] 全量采用 i64 Micros (10^-6) 存储核心经济指标。
  */
 public class EconomyManager {
 
     private static EconomyManager instance;
     private final EcoBridge plugin;
+
+    // [新增] 独立数据文件，用于存储程序运行时产生的动态数据
+    private final File dataFile;
+    private YamlConfiguration dataConfig;
 
     // 定点数转换常量 (1.0 = 1,000,000 Micros)
     private static final double PRECISION_SCALE = 1_000_000.0;
@@ -33,7 +39,7 @@ public class EconomyManager {
     private volatile double marketHeat = 0.0;
     private volatile double ecoSaturation = 0.0;
 
-    // --- 采样与状态累加器 (已由 DoubleAdder 重构为 LongAdder Micros) ---
+    // --- 采样与状态累加器 ---
     private final LongAdder circulationHeat = new LongAdder();      // 长期累积热度 (Micros)
     private final LongAdder tradeVolumeAccumulator = new LongAdder(); // 短期交易脉冲 (Micros)
     private final AtomicLong m1MoneySupplyMicros = new AtomicLong(0); // 货币发行总量 (Micros)
@@ -41,7 +47,7 @@ public class EconomyManager {
     private final AtomicLong lastVolatileTimestamp = new AtomicLong(System.currentTimeMillis());
     private long lastMacroUpdateTime = System.currentTimeMillis();
 
-    // --- 算法配置参数 (保持为 double 以方便配置读取与数学运算) ---
+    // --- 算法配置参数 ---
     private double volatilityThreshold; // 波动触发阈值
     private double decayRate;           // 热度自然衰减率
     private double capacityPerUser;     // 单用户承载力
@@ -51,6 +57,10 @@ public class EconomyManager {
 
     private EconomyManager(EcoBridge plugin) {
         this.plugin = plugin;
+        
+        // [新增] 初始化 data.yml 文件句柄
+        this.dataFile = new File(plugin.getDataFolder(), "data.yml");
+
         this.economicScheduler = Executors.newSingleThreadScheduledExecutor(
             Thread.ofVirtual().name("EcoBridge-Economy-Worker").factory()
         );
@@ -75,7 +85,18 @@ public class EconomyManager {
     public void loadState() {
         var config = plugin.getConfig();
         
-        // 读取配置并转换为 Micros
+        // [新增] 加载 data.yml，如果文件不存在则创建
+        if (!dataFile.exists()) {
+            try {
+                if (!plugin.getDataFolder().exists()) plugin.getDataFolder().mkdirs();
+                dataFile.createNewFile();
+            } catch (IOException e) {
+                LogUtil.error("无法创建 data.yml 数据文件", e);
+            }
+        }
+        this.dataConfig = YamlConfiguration.loadConfiguration(dataFile);
+        
+        // 1. 读取静态配置 (从 config.yml 读取，只读)
         double m1Double = config.getDouble("economy.m1-supply", 10_000_000.0);
         this.m1MoneySupplyMicros.set((long) (m1Double * PRECISION_SCALE));
         
@@ -83,14 +104,18 @@ public class EconomyManager {
         this.decayRate = config.getDouble("economy.daily-decay-rate", 0.05);
         this.capacityPerUser = config.getDouble("economy.macro.capacity-per-user", 5000.0);
 
-        double savedHeat = config.getDouble("internal.economy-heat", 0.0);
+        // 2. 读取动态热度 (优先 data.yml，兼容 config.yml)
+        // 逻辑：如果 data.yml 里没有记录（首次更新），则尝试读取 config.yml 里的旧数据，平滑迁移
+        double savedHeat = dataConfig.getDouble("internal.economy-heat", 
+            config.getDouble("internal.economy-heat", 0.0));
+            
         circulationHeat.reset();
         circulationHeat.add((long) (savedHeat * PRECISION_SCALE));
 
         // 初始化基础指标
         this.marketHeat = savedHeat / 100.0; 
 
-        LogUtil.info("EconomyManager 精度重构完成: M1=" + m1Double + " (Micros: " + m1MoneySupplyMicros.get() + ")");
+        LogUtil.info("EconomyManager 状态加载完成 (M1=" + m1Double + ", Heat=" + savedHeat + ")");
     }
 
     /**
@@ -137,7 +162,6 @@ public class EconomyManager {
                 if (dt < 0.1) return;
 
                 // A. 计算财富流速 (Market Heat)
-                // 从 LongAdder 获取这一秒的 Micros 总量并重置
                 long currentWindowMicros = tradeVolumeAccumulator.sumThenReset();
                 double currentWindowDouble = currentWindowMicros / PRECISION_SCALE;
                 this.marketHeat = currentWindowDouble / dt;
@@ -149,7 +173,6 @@ public class EconomyManager {
 
                 // C. 计算实时通胀率 (FFI 调用)
                 if (NativeBridge.isLoaded()) {
-                    // 传递给 Rust 时缩放回 double，Rust 内部进行复杂指数运算
                     double m1Double = m1MoneySupplyMicros.get() / PRECISION_SCALE;
                     this.inflationRate = NativeBridge.calcInflation(marketHeat, m1Double);
                 }
@@ -173,7 +196,6 @@ public class EconomyManager {
         double reductionDouble = NativeBridge.calcDecay(currentTotal, decayRate);
 
         if (Math.abs(reductionDouble) > 0.01) {
-            // 将扣减额转换回 Micros 进行扣除
             long reductionMicros = (long) (reductionDouble * PRECISION_SCALE);
             circulationHeat.add(-reductionMicros);
             
@@ -186,8 +208,19 @@ public class EconomyManager {
         plugin.getVirtualExecutor().execute(() -> {
             configLock.lock();
             try {
-                plugin.getConfig().set("internal.economy-heat", currentTotal);
-                plugin.saveConfig();
+                // [修改] 将热度写入 dataConfig 对象
+                dataConfig.set("internal.economy-heat", currentTotal);
+                
+                // [修改] 保存到 data.yml，不再调用 plugin.saveConfig()
+                try {
+                    dataConfig.save(dataFile);
+                } catch (IOException e) {
+                    LogUtil.error("无法保存 data.yml 经济数据", e);
+                }
+                
+                // 彻底移除对 config.yml 的写操作
+                // plugin.saveConfig(); 
+                
             } finally {
                 configLock.unlock();
             }

@@ -28,7 +28,6 @@ import top.ellan.ecobridge.infrastructure.persistence.redis.RedisManager;
 import top.ellan.ecobridge.infrastructure.persistence.storage.ActivityCollector;
 import top.ellan.ecobridge.infrastructure.persistence.storage.AsyncLogger;
 import top.ellan.ecobridge.application.service.ItemConfigManager; // 确保导入
-import top.ellan.ecobridge.util.ConfigMigrator;
 import top.ellan.ecobridge.util.HolidayManager;
 import top.ellan.ecobridge.util.LogUtil;
 import top.ellan.ecobridge.util.UltimateShopImporter;
@@ -45,12 +44,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * EcoBridge v1.6.6 - Auto-Sync Integration & Init Fix
+ * EcoBridge v1.6.7 - Config Safety Patch
  * <p>
  * 更新记录:
- * 1. [Init] 调整 ItemConfigManager 初始化顺序，解决 items.yml 加载依赖问题。
- * 2. [Sync] 集成 UltimateShopImporter，支持启动和重载时自动同步商品。
- * 3. [Stability] 增加 isInitialized() 检查，防止异步任务在关机时访问空实例。
+ * 1. [Config] 禁用自动配置迁移和覆盖，保护用户手动修改的 config.yml。
  */
 public final class EcoBridge extends JavaPlugin implements Listener {
 
@@ -74,8 +71,15 @@ public final class EcoBridge extends JavaPlugin implements Listener {
         // 2. 引导基础架构
         try {
             LogUtil.init();
-            saveDefaultConfig();
-            ConfigMigrator.checkAndMigrate(this);
+            
+            // [修改 1] 禁止自动覆盖配置：仅当文件不存在时才创建
+            if (!getDataFolder().exists()) getDataFolder().mkdirs();
+            if (!new java.io.File(getDataFolder(), "config.yml").exists()) {
+                saveDefaultConfig();
+            }
+            
+            // [修改 2] 禁用迁移器：防止它“修复”或“重置”你的配置注释和数值
+            // ConfigMigrator.checkAndMigrate(this);
             
             // [关键修复] 在引导基础设施前，优先初始化物品配置管理器
             // 确保后续 LimitManager 加载时 items.yml 已就绪
@@ -343,7 +347,9 @@ public final class EcoBridge extends JavaPlugin implements Listener {
         // [修复] 重载物品配置，确保最新 items.yml 被加载
         ItemConfigManager.reload();
         
-        ConfigMigrator.checkAndMigrate(this);
+        // [修改 3] 重载时禁用迁移检查，防止“修复”配置
+        // ConfigMigrator.checkAndMigrate(this);
+        
         LogUtil.init();
         if (EconomyManager.getInstance() != null) EconomyManager.getInstance().loadState();
         if (PricingManager.getInstance() != null) PricingManager.getInstance().loadConfig();
