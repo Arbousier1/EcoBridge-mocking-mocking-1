@@ -78,6 +78,25 @@ public class ConfigMigrator {
         copyValue(oldConfig, newConfig, "economy.control.predictive.horizon-seconds");
         copyValue(oldConfig, newConfig, "economy.control.lambda.min-multiplier");
         copyValue(oldConfig, newConfig, "economy.control.lambda.max-multiplier");
+        copyValue(oldConfig, newConfig, "economy.player-market.enabled");
+        copyValue(oldConfig, newConfig, "economy.player-market.quota.enabled");
+        copyValue(oldConfig, newConfig, "economy.player-market.quota.period-hours");
+        copyValue(oldConfig, newConfig, "economy.player-market.quota.base");
+        copyValue(oldConfig, newConfig, "economy.player-market.quota.gamma-per-hour");
+        copyValue(oldConfig, newConfig, "economy.player-market.quota.global-cap");
+        copyValue(oldConfig, newConfig, "economy.player-market.decay.enabled");
+        copyValue(oldConfig, newConfig, "economy.player-market.decay.delta");
+        copyValue(oldConfig, newConfig, "economy.player-market.decay.tau-days");
+        copyValue(oldConfig, newConfig, "economy.player-market.decay.window-days");
+        copyValue(oldConfig, newConfig, "economy.player-market.decay.min-multiplier");
+        copyValue(oldConfig, newConfig, "economy.player-market.indices.epsilon-enabled");
+        copyValue(oldConfig, newConfig, "economy.player-market.indices.special-enabled");
+        copyValue(oldConfig, newConfig, "economy.player-market.indices.weekend-factor");
+        copyValue(oldConfig, newConfig, "economy.player-market.indices.holiday-factor");
+        copyValue(oldConfig, newConfig, "economy.player-market.indices.noise-stddev");
+        copyValue(oldConfig, newConfig, "economy.player-market.indices.epsilon-min");
+        copyValue(oldConfig, newConfig, "economy.player-market.indices.epsilon-max");
+        copyValue(oldConfig, newConfig, "economy.player-market.indices.special-index");
         
         // --- 特殊物品覆盖 ---
         if (oldConfig.isConfigurationSection("item-settings")) {

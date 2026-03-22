@@ -95,6 +95,12 @@ public class LimitManager implements EcoLimitAPI {
         return quantity > currentLimit;
     }
 
+    public boolean isBlockedByPlayerQuota(UUID playerUuid, String shopId, String productId, double quantity) {
+        PlayerMarketPolicyService policy = PlayerMarketPolicyService.getInstance();
+        if (policy == null) return false;
+        return policy.isBlockedByQuota(playerUuid, quantity);
+    }
+
     private double calculateDynamicLimit(UUID playerUuid, String productId) {
         ActivitySnapshot snapshot = ActivityCollector.getSafeSnapshot(playerUuid);
         double playHours = snapshot.playTimeSeconds() / 3600.0;

@@ -13,6 +13,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import top.ellan.ecobridge.application.service.EconomicStateManager;
 import top.ellan.ecobridge.application.service.LimitManager;
+import top.ellan.ecobridge.application.service.PlayerMarketPolicyService;
 import top.ellan.ecobridge.application.service.PricingManager;
 import top.ellan.ecobridge.application.service.TransferManager;
 import top.ellan.ecobridge.infrastructure.ffi.model.NativeTransferResult;
@@ -71,6 +72,10 @@ public class UltimateShopHook implements Listener {
             EconomicStateManager.getInstance().recordPurchase(player, shopId, productId, amount);
         } else {
             EconomicStateManager.getInstance().recordSale(player, shopId, productId, amount);
+            PlayerMarketPolicyService policy = PlayerMarketPolicyService.getInstance();
+            if (policy != null) {
+                policy.recordSale(player.getUniqueId(), PricingManager.toMarketKey(shopId, productId), amount);
+            }
         }
     }
 
@@ -109,7 +114,12 @@ public class UltimateShopHook implements Listener {
             return;
         }
 
-        double dynamicUnitPrice = pricingManager.calculateSellPrice(shopId, productId);
+        if (limitManager.isBlockedByPlayerQuota(player.getUniqueId(), shopId, productId, amount)) {
+            simulateCancellation(event, player, "Player quota pool exhausted");
+            return;
+        }
+
+        double dynamicUnitPrice = pricingManager.calculateSellPriceForPlayer(player.getUniqueId(), shopId, productId);
         if (dynamicUnitPrice <= 0) return;
 
         double finalPayout = dynamicUnitPrice * amount;

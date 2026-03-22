@@ -66,6 +66,30 @@ economy:
       min-multiplier: 0.60
       max-multiplier: 2.20
 
+  player-market:
+    enabled: true
+    quota:
+      enabled: true
+      period-hours: 168
+      base: 64.0
+      gamma-per-hour: 0.4
+      global-cap: 4096.0
+    decay:
+      enabled: true
+      delta: 0.8
+      tau-days: 3.0
+      window-days: 21
+      min-multiplier: 0.10
+    indices:
+      epsilon-enabled: true
+      special-enabled: true
+      weekend-factor: 0.98
+      holiday-factor: 0.95
+      noise-stddev: 0.02
+      epsilon-min: 0.85
+      epsilon-max: 1.10
+      special-index: {}
+
   # [自然波动]
   environment:
     seasonal-amplitude: 0.15 # 季节性涨跌：模拟物价随日历波动。

@@ -32,6 +32,19 @@ public class ConfigValidator {
         healthy &= checkRange(config, "economy.control.predictive.horizon-seconds", 60.0, 1209600.0, 259200.0);
         healthy &= checkRange(config, "economy.control.lambda.min-multiplier", 0.1, 3.0, 0.6);
         healthy &= checkRange(config, "economy.control.lambda.max-multiplier", 0.2, 5.0, 2.2);
+        healthy &= checkRange(config, "economy.player-market.quota.period-hours", 1, 720, 168);
+        healthy &= checkRange(config, "economy.player-market.quota.base", 1.0, 100000.0, 64.0);
+        healthy &= checkRange(config, "economy.player-market.quota.gamma-per-hour", 0.0, 100.0, 0.4);
+        healthy &= checkRange(config, "economy.player-market.quota.global-cap", 1.0, 10000000.0, 4096.0);
+        healthy &= checkRange(config, "economy.player-market.decay.delta", 0.01, 10.0, 0.8);
+        healthy &= checkRange(config, "economy.player-market.decay.tau-days", 0.0, 365.0, 3.0);
+        healthy &= checkRange(config, "economy.player-market.decay.window-days", 1, 365, 21);
+        healthy &= checkRange(config, "economy.player-market.decay.min-multiplier", 0.01, 1.0, 0.10);
+        healthy &= checkRange(config, "economy.player-market.indices.weekend-factor", 0.5, 1.5, 0.98);
+        healthy &= checkRange(config, "economy.player-market.indices.holiday-factor", 0.5, 1.5, 0.95);
+        healthy &= checkRange(config, "economy.player-market.indices.noise-stddev", 0.0, 0.5, 0.02);
+        healthy &= checkRange(config, "economy.player-market.indices.epsilon-min", 0.1, 2.0, 0.85);
+        healthy &= checkRange(config, "economy.player-market.indices.epsilon-max", 0.1, 2.0, 1.10);
 
         // --- 3. 基础市场参数 ---
         healthy &= checkRange(config, "economy.decay-rate", 0.0, 1.0, 0.05);

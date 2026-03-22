@@ -15,6 +15,7 @@ import top.ellan.ecobridge.util.LogUtil;
 import java.lang.foreign.MemorySegment;
 import java.time.Duration;
 import java.util.*;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -184,6 +185,16 @@ public class PricingManager {
         return calculateSellPrice(null, productId);
     }
 
+    public double calculateSellPriceForPlayer(UUID playerUuid, String shopId, String productId) {
+        double baseSell = calculateSellPrice(shopId, productId);
+        PlayerMarketPolicyService policy = PlayerMarketPolicyService.getInstance();
+        if (policy == null || playerUuid == null) return baseSell;
+
+        String marketKey = toMarketKey(shopId, productId);
+        double itemLambda = resolveItemLambda(shopId, productId);
+        return policy.computePersonalizedSellPrice(playerUuid, marketKey, baseSell, itemLambda);
+    }
+
     /**
      * 计算动态价格 (Macro Price + Micro Slippage)
      * 结合了宏观 PID 价格和微观交易滑点。
@@ -318,6 +329,31 @@ public class PricingManager {
         if (p.isBlank()) return "";
         String s = normalizeMarketKey(shopId);
         return s.isBlank() ? p : s + "." + p;
+    }
+
+    private double resolveItemLambda(String shopId, String productId) {
+        var config = plugin.getConfig();
+        double fallback = config.getDouble("economy.default-lambda", 0.002);
+        var itemsConfig = ItemConfigManager.get();
+        if (itemsConfig == null) return fallback;
+
+        var section = itemsConfig.getConfigurationSection("item-settings");
+        if (section == null) return fallback;
+
+        if (shopId != null && !shopId.isBlank()) {
+            var shopSec = section.getConfigurationSection(shopId);
+            if (shopSec != null) {
+                return shopSec.getDouble(productId + ".lambda", fallback);
+            }
+        }
+
+        for (String candidateShop : section.getKeys(false)) {
+            var shopSec = section.getConfigurationSection(candidateShop);
+            if (shopSec != null && shopSec.contains(productId + ".lambda")) {
+                return shopSec.getDouble(productId + ".lambda", fallback);
+            }
+        }
+        return fallback;
     }
 
     private static String normalizeMarketKey(String input) {
