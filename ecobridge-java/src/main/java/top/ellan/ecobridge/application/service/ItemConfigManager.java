@@ -8,6 +8,8 @@ import top.ellan.ecobridge.util.LogUtil;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.StringReader;
+import java.util.function.Consumer;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
@@ -59,9 +61,14 @@ public class ItemConfigManager {
      * 建议仅通过此类提供的 update 方法进行修改。
      */
     public static FileConfiguration get() {
+        return getSnapshot();
+    }
+
+    public static FileConfiguration getSnapshot() {
         rwLock.readLock().lock();
         try {
-            return config;
+            if (config == null) return null;
+            return YamlConfiguration.loadConfiguration(new StringReader(config.saveToString()));
         } finally {
             rwLock.readLock().unlock();
         }
@@ -78,6 +85,23 @@ public class ItemConfigManager {
             }
         } catch (IOException e) {
             LogUtil.error("无法保存 items.yml", e);
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Thread-safe mutation entrypoint for items.yml.
+     * Caller mutates in-memory config under write lock, then this method persists it atomically.
+     */
+    public static void mutateAndSave(Consumer<FileConfiguration> mutator) {
+        rwLock.writeLock().lock();
+        try {
+            if (config == null) return;
+            mutator.accept(config);
+            config.save(file);
+        } catch (IOException e) {
+            LogUtil.error("鏃犳硶淇濆瓨 items.yml", e);
         } finally {
             rwLock.writeLock().unlock();
         }

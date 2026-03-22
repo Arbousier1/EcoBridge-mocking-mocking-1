@@ -44,7 +44,7 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  */
 public class TransferManager {
 
-    private static TransferManager instance;
+    private static volatile TransferManager instance;
     private final EcoBridge plugin;
     private final ExecutorService vExecutor;
     private final String mainCurrencyId;

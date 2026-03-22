@@ -3,6 +3,7 @@ package top.ellan.ecobridge.application.service;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.scheduler.BukkitTask;
 import top.ellan.ecobridge.EcoBridge;
 import top.ellan.ecobridge.application.control.DefaultEconomySignalCollector;
 import top.ellan.ecobridge.application.control.EconomyControlSignals;
@@ -35,6 +36,7 @@ public class MacroEngine {
     private final AtomicReference<MacroSnapshot> metadataMirror = new AtomicReference<>(null);
 
     private final ScheduledExecutorService scheduler;
+    private volatile BukkitTask metadataSyncTask;
     private long lastComputeTime = System.currentTimeMillis();
 
     private double defaultLambda;
@@ -87,7 +89,7 @@ public class MacroEngine {
     public void start() {
         this.lastComputeTime = System.currentTimeMillis();
 
-        Bukkit.getScheduler().runTaskTimer(plugin, this::syncMetadataFromMain, 20L, 100L);
+        metadataSyncTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncMetadataFromMain, 20L, 100L);
         scheduler.scheduleAtFixedRate(this::runCycle, 2, 2, TimeUnit.SECONDS);
 
         LogUtil.info("MacroEngine started (Predictive Fuzzy Fluid control)");
@@ -95,6 +97,11 @@ public class MacroEngine {
 
     public void shutdown() {
         LogUtil.info("Shutting down MacroEngine...");
+        BukkitTask task = metadataSyncTask;
+        if (task != null) {
+            task.cancel();
+            metadataSyncTask = null;
+        }
         scheduler.shutdown();
         try {
             if (!scheduler.awaitTermination(2, TimeUnit.SECONDS)) {

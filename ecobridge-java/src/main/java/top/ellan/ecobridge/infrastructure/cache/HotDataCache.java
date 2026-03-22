@@ -59,8 +59,9 @@ public class HotDataCache {
 
                 // 逻辑回调：切换回主线程处理 Bukkit 实体
                 // 检查插件状态，防止关机时调度报错
-                if (EcoBridge.isInitialized() && EcoBridge.getInstance().isEnabled() && !isShutdown.get()) {
-                    Bukkit.getScheduler().runTask(EcoBridge.getInstance(), () -> {
+                EcoBridge plugin = EcoBridge.getInstanceOrNull();
+                if (plugin != null && plugin.isEnabled() && !isShutdown.get()) {
+                    Bukkit.getScheduler().runTask(plugin, () -> {
                         Player p = Bukkit.getPlayer(uuid);
                         if (p != null && p.isOnline()) {
                             CACHE.put(uuid, data);
@@ -96,7 +97,8 @@ public class HotDataCache {
         // 关键修复：先检查 EcoBridge 是否仍然活跃
         // 如果插件正在关闭 (isInitialized=false) 或已禁用 (isEnabled=false)
         // 则直接降级为同步保存，不再提交异步任务
-        if (!EcoBridge.isInitialized() || !EcoBridge.getInstance().isEnabled()) {
+        EcoBridge plugin = EcoBridge.getInstanceOrNull();
+        if (plugin == null || !plugin.isEnabled()) {
             try {
                 saveSyncInternal(uuid, data);
             } catch (Exception e) {

@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class RedisManager {
 
-    private static RedisManager instance;
+    private static volatile RedisManager instance;
     private final EcoBridge plugin;
     private final ObjectMapper mapper;
 

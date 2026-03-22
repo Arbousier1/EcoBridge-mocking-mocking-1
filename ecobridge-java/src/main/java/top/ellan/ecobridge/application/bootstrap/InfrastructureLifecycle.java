@@ -1,15 +1,29 @@
 package top.ellan.ecobridge.application.bootstrap;
 
 import top.ellan.ecobridge.EcoBridge;
+import top.ellan.ecobridge.application.lifecycle.LifecycleComponent;
+import top.ellan.ecobridge.application.lifecycle.LifecyclePhase;
 import top.ellan.ecobridge.infrastructure.persistence.database.DatabaseManager;
 import top.ellan.ecobridge.infrastructure.persistence.redis.RedisManager;
 import top.ellan.ecobridge.infrastructure.persistence.storage.AsyncLogger;
 import top.ellan.ecobridge.util.HolidayManager;
 
 /** Infrastructure lifecycle orchestration. */
-public final class InfrastructureLifecycle {
+public final class InfrastructureLifecycle implements LifecycleComponent {
+
+  public static final InfrastructureLifecycle INSTANCE = new InfrastructureLifecycle();
 
   private InfrastructureLifecycle() {}
+
+  @Override
+  public LifecyclePhase phase() {
+    return LifecyclePhase.INFRASTRUCTURE;
+  }
+
+  @Override
+  public String componentName() {
+    return "infrastructure";
+  }
 
   public static void start(EcoBridge plugin) {
     DatabaseManager.init();

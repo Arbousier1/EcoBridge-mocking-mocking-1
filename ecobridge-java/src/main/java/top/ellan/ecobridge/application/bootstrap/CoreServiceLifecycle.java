@@ -1,6 +1,8 @@
 package top.ellan.ecobridge.application.bootstrap;
 
 import top.ellan.ecobridge.EcoBridge;
+import top.ellan.ecobridge.application.lifecycle.LifecycleComponent;
+import top.ellan.ecobridge.application.lifecycle.LifecyclePhase;
 import top.ellan.ecobridge.application.service.EconomicStateManager;
 import top.ellan.ecobridge.application.service.EconomyManager;
 import top.ellan.ecobridge.application.service.LimitManager;
@@ -10,9 +12,21 @@ import top.ellan.ecobridge.application.service.TransferManager;
 import top.ellan.ecobridge.infrastructure.ffi.bridge.NativeBridge;
 
 /** Core service lifecycle orchestration. */
-public final class CoreServiceLifecycle {
+public final class CoreServiceLifecycle implements LifecycleComponent {
+
+  public static final CoreServiceLifecycle INSTANCE = new CoreServiceLifecycle();
 
   private CoreServiceLifecycle() {}
+
+  @Override
+  public LifecyclePhase phase() {
+    return LifecyclePhase.CORE_SERVICES;
+  }
+
+  @Override
+  public String componentName() {
+    return "core-services";
+  }
 
   public static LimitManager start(EcoBridge plugin) {
     EconomyManager.init(plugin);

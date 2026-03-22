@@ -7,6 +7,17 @@ authors: [ Ellan ]
 description: "基于 Java 25 FFM + Rust 核心的 DDD 架构动态经济系统"
 website: "https://github.com/Ellan/EcoBridge"
 
+# Runtime library references (loaded by Paper at startup)
+libraries:
+  - "tools.jackson.core:jackson-databind:3.0.0"
+  - "org.mariadb.jdbc:mariadb-java-client:3.5.7"
+  - "com.zaxxer:HikariCP:7.0.2"
+  - "com.github.ben-manes.caffeine:caffeine:3.2.3"
+  - "redis.clients:jedis:5.2.0"
+  - "org.ow2.asm:asm:9.9.1"
+  - "org.ow2.asm:asm-commons:9.9.1"
+  - "net.bytebuddy:byte-buddy-agent:1.15.10"
+
 # Paper 现代依赖管理 (Paper 1.19.4+)
 dependencies:
   server:

@@ -32,7 +32,7 @@ public class PricingManager {
 
     private static final String MARKET_TRADE_META_PREFIX = "MARKET_TRADE:";
 
-    private static PricingManager instance;
+    private static volatile PricingManager instance;
     private final EcoBridge plugin;
 
     private final MacroEngine macroEngine;
