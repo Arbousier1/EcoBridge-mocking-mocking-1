@@ -26,7 +26,7 @@ import top.ellan.ecobridge.integration.platform.listener.CoinsEngineListener;
 import top.ellan.ecobridge.integration.platform.listener.CommandHijacker;
 import top.ellan.ecobridge.application.service.*;
 import top.ellan.ecobridge.infrastructure.persistence.storage.ActivityCollector;
-import top.ellan.ecobridge.application.service.ItemConfigManager; // 缁绢収鍠曠换姘扁偓鐢靛帶閸?
+import top.ellan.ecobridge.application.service.ItemConfigManager;
 import top.ellan.ecobridge.util.LogUtil;
 import top.ellan.ecobridge.util.UltimateShopImporter;
 
@@ -42,10 +42,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * EcoBridge v1.6.7 - Config Safety Patch
- * <p>
- * 闁哄洤鐡ㄩ弻濠勬媼閺夎法绉?
- * 1. [Config] 缂佸倷鑳堕弫銈夋嚊椤忓嫬袟闂佹澘绉堕悿鍡樻交娴ｇ洅鈺呭椽瀹€鍐炬船闁烩晜鐗槐婵囩┍濠靛洤袘闁活潿鍔嶉崺娑㈠箥鐎ｎ亜袟濞ｅ浂鍠楅弫濂告儍?config.yml闁?
+ * Main plugin class.
+ * Coordinates startup, dependency checks, hooks, and shutdown.
  */
 public final class EcoBridge extends JavaPlugin implements Listener {
 
@@ -56,63 +54,73 @@ public final class EcoBridge extends JavaPlugin implements Listener {
     private ExecutorService virtualExecutor;
     private final AtomicBoolean fullyInitialized = new AtomicBoolean(false);
     
-    // 鐟滄澘宕悺娆徫熼垾宕囩闁绘鍩栭埀顑跨劍鐢爼宕?
+
+    // Shadow mode keeps observation/audit behaviors without strict blocking.
     private final AtomicBoolean shadowMode = new AtomicBoolean(false);
 
     @Override
     public void onEnable() {
         instance = this;
 
-        // 1. 闁告帗绻傞～鎰板礌?Java 25 闁惧繑纰嶇€氭瑧鐥捄銊㈡煠婵?
+
+        // Runtime executor for async plugin tasks.
         this.virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
-        // 2. 鐎殿喗娲栭閬嶅春閾忚鏀ㄩ柡瀣煐閻?
+
         try {
             LogUtil.init();
             
-            // [濞ｅ浂鍠楅弫?1] 缂佸倷鐒﹂娑㈡嚊椤忓嫬袟閻熸洖妫涘ú濠囨煀瀹ュ洨鏋傞柨娑欑煯缁氦銇愰幘瀛樼€ù鐘虫构缁楀鈧稒锚濠€顏堝籍閼搁潧顤呴柛鎺撶☉缂?
+
+            // Ensure data folder and default config exist.
             if (!getDataFolder().exists()) getDataFolder().mkdirs();
             if (!new java.io.File(getDataFolder(), "config.yml").exists()) {
                 saveDefaultConfig();
             }
             
-            // [濞ｅ浂鍠楅弫?2] 缂佸倷鑳堕弫銈嗘交娴ｇ洅鈺呭闯椤帞绐楅梻鍐ㄥ级椤掓稓鈧懓鍟犻埀顒佺矆閹便劍寰勫浣插亾濠靛洤鐏楅柍銉︾矒閸ｅ摜绱旈鍏夊亾濠靛懐绋戦柣銊ュ閸樸倗绱旈鑺ユ殘闂佹彃锕ら幏浼村极閺夊簱鍋?
-            // ConfigMigrator.checkAndMigrate(this);
+
+
             
-            // [闁稿繑濞婇弫顓熺┍椤旂⒈妲籡 闁革负鍔岀槐鈺冣偓鐢靛帶閻斺偓缁绢厸鍋撻悹浣哄亾閺岋箓宕滃蹇曠濞村吋锚閸樻盯宕氬┑鍡╂綏闁告牗鐗滄晶鍧楀传娓氣偓閸樸倗绱旈缁㈠悁闁荤偛妫楀▍?
-            // 缁绢収鍠曠换姘跺触鎼达絿鏁?LimitManager 闁告梻濮惧ù鍥籍?items.yml 鐎瑰憡褰冨銊х磼?
+
+
+            // Initialize dedicated items.yml loader.
             ItemConfigManager.init(this);
             
+            // Start infrastructure and activity heartbeat.
             bootstrapInfrastructure();
-            ActivityCollector.startHeartbeat(this); // 濞ｅ洦绻冪€垫棃宕㈤悢鍛婄畳闁告稖妫勯幃鏇熺▕閻樺啿鍔?
+            ActivityCollector.startHeartbeat(this);
             
-            // 婵炲鍔岄崬?ASM 閺夌儐鍓氬畷鏌ュ闯?
+
+            // Install ASM redirection for UltimateShop hook points.
             setupBytecodeTransformer();
             
         } catch (Exception e) {
-            getLogger().severe("闁糕晞娅ｉ、鍛村几閼哥數鈧垰顕ｉ弴鐑嗗殼濠㈡儼绮剧憴? " + e.getMessage());
+            getLogger().severe("闂傚倸鍊烽懗鍓佹兜閸洖鐤鹃柣鎰ゴ閺嬪秹鏌ㄥ┑鍡╂Ф闁逞屽厸缁舵艾鐣烽妸鈺佺骇闁瑰瓨绻傚▓銈夋⒒娴ｅ搫甯堕柟鑺ョ矒瀵偊骞栨担鍝ュ姦濡炪倖甯掗ˇ顖炴倶閻樼偨浜滈柡鍥朵簽缁夘喚鈧鍠楅幐鎶藉箖濠婂牆骞㈡俊銈勭贰閸熷本绻濋悽闈浶為柛銊︽そ瀹曟洟鎳栭埡浣哥亰闂佸憡鎸嗛崟顐ｇ€? " + e.getMessage());
             e.printStackTrace();
             Bukkit.getPluginManager().disablePlugin(this);
             return;
         }
 
-        // 3. 闁绘粠鍨伴。銊︾▔鎼存繄璐╅悹褎鐗楅悧搴㈩殽?
+
+        // Abort startup if required dependencies are missing.
         if (!verifyDependencies()) return;
 
-        // 4. 缂備礁瀚▎銏ゅ礉閻樼儤绁伴柟閿嬫尰婢?
+
         try {
-            // LimitManager 濞撴碍绻嗙粋?ItemConfigManager闁挎稑鏈婵嬪籍鐠哄搫鍤掗悗鐟邦槸閸?
+
+            // Start core services then register commands/listeners/hooks.
             limitAPI = CoreServiceLifecycle.start(this);
 
-            // 5. 闁哄秶顭堢缓鐐▔濮橆剙顫ゆ繛澶堝妼閸?(闁告柣鍔嶉埀顑跨劍閺佺偤宕樺畝鍕ㄥ亾閸岀偛甯?Paper)
+
             registerCommands(); 
             registerListeners();
             registerHooks();
 
-            // 闁圭瑳鍡╂斀闁绘せ鏅濋幃濠囧箰閸ワ附濮㈤柛鏃戝亝鐎垫棃鏁嶅畝鍕暁閻庤鑹鹃崣蹇涘嫉瀹ュ牊绁悹鎰剁畱閸欏棝宕?
+
+            // Hijack currency commands for unified eco behavior.
             new CommandHijacker(this).hijackAllCurrencies();
 
-            // [闁哄倹婢橀·鍍?闁告凹鍨版慨鈺呭籍閹澘娈伴柛鏂诲妺缁?UltimateShop 閻庣數鍘ч崣鍡涘疮閸℃鎯傞柡浣哄瀹?
+
+            // Import UltimateShop item defaults when plugin exists.
             if (getServer().getPluginManager().isPluginEnabled("UltimateShop")) {
                 double defaultLambda = getConfig().getDouble("economy.default-lambda", 0.002);
                 UltimateShopImporter.runImport(defaultLambda);
@@ -120,7 +128,8 @@ public final class EcoBridge extends JavaPlugin implements Listener {
 
             this.fullyInitialized.set(true);
             
-            // 闁瑰灚鎸稿畵?Banner
+
+            // Print startup summary banner.
             printSummaryBanner();
 
         } catch (Throwable e) {
@@ -135,10 +144,6 @@ public final class EcoBridge extends JavaPlugin implements Listener {
         instance = null;
     }
 
-    /**
-     * [闁哄倹婢橀·鍍?閻庣懓顦崣蹇涙儍閸曨厼笑闁诡兛鐒﹂ˉ鍛村蓟閵夛附鐓欐繛?
-     * 闁活潿鍔嬬花顒勬⒓閸欏鍓剧€殿喖鍊归鐐寸鐠囨彃顫?濠?Caffeine 闁搞儳鍋犻惃?闁革负鍔嶈ぐ鍐╃鐠哄搫褰犻梻鍌ゅ幖閹鎷嬮崸妤侊紪閻庡湱鍋樼欢銉р偓浣冨閸ぱ冪暦閳哄倻鐨?
-     */
     public static boolean isInitialized() {
         return instance != null;
     }
@@ -161,27 +166,28 @@ public final class EcoBridge extends JavaPlugin implements Listener {
         this.shadowMode.set(enabled);
     }
 
-    // ========================================================================================
-    // 闁糕晞娅ｉ、鍛媼閻愵剚鐓㈠☉鎾虫捣閺佹捇宕ㄩ挊澶嬪櫙闁哄牏鍠撻鎼佹偠?
-    // ========================================================================================
 
+
+
+
+    // ============================== lifecycle helpers ==============================
     private void bootstrapInfrastructure() {
         InfrastructureLifecycle.start(this);
     }
 
     private void shutdownSequence() {
-        sendConsole("<yellow>[EcoBridge] 婵繐绲藉﹢顏堝触椤栨艾袟閻庣懓顦崣蹇涘礂閾忣偅绨氶幖鏉戠箰閸?..");
+        sendConsole("<yellow>[EcoBridge] 婵犵數濮甸鏍窗濡ゅ啯宕查柟閭﹀枛缁躲倝鏌﹀Ο渚闁肩増瀵ч妵鍕疀閹捐泛顣洪柣鐔哥懕闂勫嫰濡甸崟顖氬唨闁靛鍔岄ˉ婵嬫偠濮樺崬鏋涢柡宀嬬稻閹棃鏁愰崱妤佺暚婵＄偑鍊х€靛矂宕圭捄铏规殾闁挎繂鐗忛悿鈧┑鐐村灦椤洭藝瑜斿娲箚瑜庣粋瀣煕鐎ｎ亝鍣介柤鍝勫船椤繄鎹勯搹璇″晣闂備礁鎼ˇ浼村垂閸︻厾涓嶅ù鐓庣摠閻?..");
 
         if (fullyInitialized.getAndSet(false)) {
             try {
                 CoreServiceLifecycle.stop();
                 
-                LogUtil.info("婵繐绲藉﹢顏堝箥瑜戦、鎴犵磽閹惧磭鎽犵€殿喖鎼崺妤呭箰娴ｉ鐣介柛?..");
+                LogUtil.info("婵犵數濮甸鏍窗濡ゅ啯宕查柟閭﹀枛缁躲倝鏌﹀Ο渚闁肩増瀵ч妵鍕疀閹捐泛顣虹紓浣哄О閸庢娊骞夐幖浣哥闁挎棁銆€閸嬫挻绗熼埀顒勭嵁鐎ｎ喗鍋愰柣銏㈩暜缁辨娊姊绘担绛嬫綈闁稿骸纾竟鏇㈩敇閵忕姷顔戦梺缁橆焽椤ｄ粙宕戦幘鏂ユ灁闁割煈鍠楅悘鍫ユ⒑閸︻厸鎷￠柛瀣工閻ｇ兘宕崟搴㈡瀹曘劑顢橀悪鈧崬璺衡攽閻愯埖褰х紓宥勭窔钘熼柟鍓х帛閸嬧晛霉閻樺樊鍎愰柣?..");
                 HotDataCache.saveAllSync();
 
 
             } catch (Exception e) {
-                getLogger().severe("闁稿繗娅曞┃鈧柡鍫㈠枛濡灝顕ｉ崒姘卞煑: " + e.getMessage());
+                getLogger().severe("闂傚倸鍊烽懗鍫曗€﹂崼銏″床婵°倐鍋撻柍璇茬Ч瀵挳鎮欓埡鍌涙殜闂備線鈧偛鑻晶鎾煛瀹€瀣瘈鐎规洖銈告慨鈧柣妯虹－娴滎亝绻濈喊妯活潑闁稿瀚伴幃妯衡攽鐎ｅ灚鏅梺鎸庣箓椤︻垳澹曢崗鍏煎弿婵☆垰鎼懜褰掓煟? " + e.getMessage());
             }
         }
 
@@ -209,7 +215,7 @@ public final class EcoBridge extends JavaPlugin implements Listener {
     }
 
     private void setupBytecodeTransformer() {
-        LogUtil.info("<aqua>婵繐绲藉﹢顏勨枖閵娿儱寮?ASM 闁瑰嚖闄勯崺鍛村闯?(v1.6.2 Redirection)...</aqua>");
+        LogUtil.info("<aqua>婵犵數濮甸鏍窗濡ゅ啯宕查柟閭﹀枛缁躲倝鏌﹀Ο渚闁肩増瀵ч妵鍕疀閹炬剚浠遍梺鍝勵儐閻楃娀寮婚弴鐔虹闁割煈鍠栨慨搴ㄦ倵?ASM 闂傚倸鍊烽懗鍫曞箠閹捐鍚归柡宥庡幗閳锋棃鏌涢弴銊ョ仩闁哄嫨鍎甸弻娑樷槈濞嗘劗绋囬梻?(v1.6.2 Redirection)...</aqua>");
         try {
             Instrumentation inst = getInstrumentation();
             if (inst != null) {
@@ -282,7 +288,7 @@ public final class EcoBridge extends JavaPlugin implements Listener {
 
             commandMap.register("ecobridge", new DynamicCommand(
                 "ecopay",
-                "闂侇偅淇虹换?Rust 闁绘せ鏅濋幃濠囧礃閸涱喚澹嬮悗瀛ゃ値鍚€闁告瑦鍨奸幑锝夊矗濡ゅ啯纾х紒鐙呯磿濞堟垶娼鍐槱",
+                "Transfer money through EcoBridge economic pipeline.",
                 "/ecopay <player> <amount>",
                 Arrays.asList("epay", "auditpay"),
                 "ecobridge.command.transfer",
@@ -291,7 +297,7 @@ public final class EcoBridge extends JavaPlugin implements Listener {
 
             commandMap.register("ecobridge", new DynamicCommand(
                 "ecoadmin",
-                "EcoBridge 闁哄秶顭堢缓鍓х不閿涘嫭鍊為柟绋挎矗閹?(Native闁告劕鎳忛悧鎶藉箳瑜嶉崺?闂佹彃绉峰ù?鐟滄澘宕悺娆徫熼垾宕囩闁告帒娲﹀畷?",
+                "EcoBridge admin command (shadow/reload/import).",
                 "/ecoadmin <shadow|reload|import>",
                 Arrays.asList("eb", "eco"),
                 "ecobridge.admin",
@@ -301,7 +307,7 @@ public final class EcoBridge extends JavaPlugin implements Listener {
             LogUtil.info("Paper mode dynamic command registration complete.");
 
         } catch (Exception e) {
-            LogUtil.error("闁告柣鍔嶉埀顑跨劍鐎垫碍绂掗妶鍡樻殘闁告劕鑻妵鎴犳嫻?(Paper Mode)", e);
+            LogUtil.error("闂傚倸鍊风粈渚€骞夐敓鐘茶摕闁挎繂顦粈澶屸偓骞垮劚椤︻垶鎮為崹顐犱簻闁硅揪绲剧涵鍫曟煕閺傝法效闁诡喗顨婂畷褰掝敃閵堝孩娈圭紓鍌欑閸婂湱鏁埄鍐х箚闁割偅娲栭獮銏′繆椤栨粎甯涢柣锝呫偢濮婄粯鎷呴崨濠傛殘闂佸憡姊瑰ú鐔煎箠閻旂⒈鏁嶉柣鎰棘閿曞倹鐓欓悗鐢殿焾鏍￠柣?(Paper Mode)", e);
         }
     }
 
@@ -323,16 +329,18 @@ public final class EcoBridge extends JavaPlugin implements Listener {
     public void reload() {
         reloadConfig();
         
-        // [濞ｅ浂鍠栭ˇ鐬?闂佹彃绉峰ù鍥偋閳轰焦鎯傞梺鏉跨Ф閻ゅ棝鏁嶅畝鈧垾妯荤┍濠靛洦浠橀柡?items.yml 閻炴凹鍋勬慨鐐存姜?
+
+        // Reload external item settings.
         ItemConfigManager.reload();
         
-        // [濞ｅ浂鍠楅弫?3] 闂佹彃绉峰ù鍥籍閸撲緡娲ｉ柣顫姀缁鸿偐绮旂紒姗嗘⒕闁哄被鍎荤槐婵嬫⒓閸欏鍓鹃柍銉︾矆閹便劍寰勫浣插亾濠靛甯崇紓?
-        // ConfigMigrator.checkAndMigrate(this);
+
+
         
         LogUtil.init();
         CoreServiceLifecycle.reload((LimitManager) limitAPI);
 
-        // [闁哄倹婢橀·鍍?闂佹彃绉峰ù鍥籍閹澘娈伴柛鏂诲妼閸熲偓婵炲棌鈧櫕鍊辨慨?UltimateShop 闁轰胶澧楀畵?
+
+        // Re-import UltimateShop values after reload.
         if (getServer().getPluginManager().isPluginEnabled("UltimateShop")) {
             double defaultLambda = getConfig().getDouble("economy.default-lambda", 0.002);
             UltimateShopImporter.runImport(defaultLambda);
