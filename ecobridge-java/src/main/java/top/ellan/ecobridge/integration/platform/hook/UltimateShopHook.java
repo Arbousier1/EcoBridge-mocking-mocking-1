@@ -15,14 +15,14 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
-import top.ellan.ecobridge.application.service.EconomyManager;
 import top.ellan.ecobridge.application.service.EconomicStateManager;
+import top.ellan.ecobridge.application.service.EconomyManager;
 import top.ellan.ecobridge.application.service.LimitManager;
 import top.ellan.ecobridge.application.service.PlayerMarketPolicyService;
 import top.ellan.ecobridge.application.service.PricingManager;
 import top.ellan.ecobridge.application.service.TransferManager;
-import top.ellan.ecobridge.infrastructure.persistence.storage.AsyncLogger;
 import top.ellan.ecobridge.infrastructure.ffi.model.NativeTransferResult;
+import top.ellan.ecobridge.infrastructure.persistence.storage.AsyncLogger;
 import top.ellan.ecobridge.integration.platform.compat.UltimateShopCompat;
 
 /** Runtime hook for UltimateShop transaction events. */
@@ -194,7 +194,11 @@ public class UltimateShopHook implements Listener {
   }
 
   private void recordFinalSettlement(
-      ItemFinishTransactionEvent event, Player player, String shopId, String productId, boolean isBuy) {
+      ItemFinishTransactionEvent event,
+      Player player,
+      String shopId,
+      String productId,
+      boolean isBuy) {
     double settledMoney = resolveFinalEconomyMoney(event, isBuy);
     if (!Double.isFinite(settledMoney) || settledMoney <= 0.0) return;
 
@@ -215,7 +219,8 @@ public class UltimateShopHook implements Listener {
   }
 
   private double resolveFinalEconomyMoney(ItemFinishTransactionEvent event, boolean isBuy) {
-    Object resultObj = isBuy ? invokeNoArg(event, "getTakeResult") : invokeNoArg(event, "getGiveResult");
+    Object resultObj =
+        isBuy ? invokeNoArg(event, "getTakeResult") : invokeNoArg(event, "getGiveResult");
     if (resultObj == null) return 0.0;
 
     Object mapObj = invokeNoArg(resultObj, "getResultMap");

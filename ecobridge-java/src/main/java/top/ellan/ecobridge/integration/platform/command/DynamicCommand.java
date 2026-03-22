@@ -29,4 +29,3 @@ public final class DynamicCommand extends Command {
     return executor.onCommand(sender, this, commandLabel, args);
   }
 }
-

@@ -4,8 +4,8 @@ import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Method;
 import top.ellan.ecobridge.application.lifecycle.LifecycleComponent;
 import top.ellan.ecobridge.application.lifecycle.LifecyclePhase;
-import top.ellan.ecobridge.integration.platform.asm.EcoShopTransformer;
 import top.ellan.ecobridge.infrastructure.i18n.I18n;
+import top.ellan.ecobridge.integration.platform.asm.EcoShopTransformer;
 import top.ellan.ecobridge.util.LogUtil;
 
 /** ASM integration lifecycle for UltimateShop bytecode redirection. */

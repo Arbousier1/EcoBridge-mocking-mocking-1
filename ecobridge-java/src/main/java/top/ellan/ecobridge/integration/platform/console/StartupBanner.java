@@ -29,7 +29,9 @@ public final class StartupBanner {
     lines.add(
         I18n.tr(
             "banner.mode",
-            plugin.isShadowMode() ? I18n.tr("banner.mode.shadow") : I18n.tr("banner.mode.enforced")));
+            plugin.isShadowMode()
+                ? I18n.tr("banner.mode.shadow")
+                : I18n.tr("banner.mode.enforced")));
     lines.add(I18n.tr("banner.concurrency"));
     lines.add(I18n.tr("banner.compat"));
 

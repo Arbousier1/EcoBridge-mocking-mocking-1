@@ -17,10 +17,9 @@ import top.ellan.ecobridge.infrastructure.persistence.storage.AsyncLogger;
 /**
  * CoinsEngine balance listener.
  *
- * <p>Key behavior:
- * 1. Uses {@link TransactionContext} to detect internal market transactions.
- * 2. Prevents double counting by recording market-side velocity only on debit leg (delta &lt; 0).
- * 3. Synchronizes latest balance to cache + DB + async journal.
+ * <p>Key behavior: 1. Uses {@link TransactionContext} to detect internal market transactions. 2.
+ * Prevents double counting by recording market-side velocity only on debit leg (delta &lt; 0). 3.
+ * Synchronizes latest balance to cache + DB + async journal.
  */
 public class CoinsEngineListener implements Listener {
 

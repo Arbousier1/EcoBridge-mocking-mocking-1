@@ -11,6 +11,7 @@ import top.ellan.ecobridge.application.lifecycle.LifecyclePhase;
 import top.ellan.ecobridge.application.service.LimitManager;
 import top.ellan.ecobridge.application.service.PricingManager;
 import top.ellan.ecobridge.application.service.TransferManager;
+import top.ellan.ecobridge.infrastructure.i18n.I18n;
 import top.ellan.ecobridge.integration.platform.command.AdminCommand;
 import top.ellan.ecobridge.integration.platform.command.DynamicCommand;
 import top.ellan.ecobridge.integration.platform.command.TransferCommand;
@@ -18,7 +19,6 @@ import top.ellan.ecobridge.integration.platform.hook.EcoPlaceholderExpansion;
 import top.ellan.ecobridge.integration.platform.hook.UltimateShopHook;
 import top.ellan.ecobridge.integration.platform.listener.CacheListener;
 import top.ellan.ecobridge.integration.platform.listener.CoinsEngineListener;
-import top.ellan.ecobridge.infrastructure.i18n.I18n;
 import top.ellan.ecobridge.util.LogUtil;
 import top.ellan.ecobridge.util.UltimateShopImporter;
 
@@ -64,7 +64,8 @@ public final class PlatformIntegrationLifecycle implements LifecycleComponent {
     }
     if (pm.isPluginEnabled("UltimateShop")) {
       pm.registerEvents(
-          new UltimateShopHook(TransferManager.getInstance(), PricingManager.getInstance(), limitManager),
+          new UltimateShopHook(
+              TransferManager.getInstance(), PricingManager.getInstance(), limitManager),
           plugin);
     }
   }

@@ -30,7 +30,8 @@ public final class ShutdownLifecycle implements LifecycleComponent {
     return "shutdown";
   }
 
-  public static void stop(EcoBridge plugin, AtomicBoolean fullyInitialized, ExecutorService executor) {
+  public static void stop(
+      EcoBridge plugin, AtomicBoolean fullyInitialized, ExecutorService executor) {
     sendConsole("<yellow>[EcoBridge] " + I18n.tr("shutdown.begin") + "</yellow>");
 
     if (fullyInitialized.getAndSet(false)) {
