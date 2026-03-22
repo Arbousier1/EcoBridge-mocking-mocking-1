@@ -59,12 +59,12 @@ economy:
     # 蓄水池容量：平均每个玩家能存多少钱而不引起系统预警。
     capacity-per-user: 5000.0
 
-  # [减震器 (PID)] - 让物价不要像过山车一样乱跳
-  # PID 控制器通过这三个参数来平滑价格曲线，避免因单一玩家大量交易导致价格崩盘。
-  pid:
-    kp: 0.4   # 弹性：对现在买卖的反应。
-    ki: 0.08  # 稳性：对长期偏离基准价的纠正。
-    kd: 0.15  # 预测：对恶意刷钱、投机行为的阻尼。
+  control:
+    predictive:
+      horizon-seconds: 259200.0
+    lambda:
+      min-multiplier: 0.60
+      max-multiplier: 2.20
 
   # [自然波动]
   environment:

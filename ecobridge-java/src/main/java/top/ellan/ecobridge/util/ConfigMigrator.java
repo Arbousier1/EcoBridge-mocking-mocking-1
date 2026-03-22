@@ -71,12 +71,13 @@ public class ConfigMigrator {
         copyValue(oldConfig, newConfig, "redis.password");
         copyValue(oldConfig, newConfig, "redis.server-id");
 
-        // --- 经济参数 (保留用户调优过的 PID 参数) ---
+        // --- 经济参数 ---
         copyValue(oldConfig, newConfig, "economy.macro.target-velocity");
-        copyValue(oldConfig, newConfig, "economy.pid.kp");
-        copyValue(oldConfig, newConfig, "economy.pid.ki");
-        copyValue(oldConfig, newConfig, "economy.pid.kd");
+        copyValue(oldConfig, newConfig, "economy.m1-supply");
         copyValue(oldConfig, newConfig, "economy.default-lambda");
+        copyValue(oldConfig, newConfig, "economy.control.predictive.horizon-seconds");
+        copyValue(oldConfig, newConfig, "economy.control.lambda.min-multiplier");
+        copyValue(oldConfig, newConfig, "economy.control.lambda.max-multiplier");
         
         // --- 特殊物品覆盖 ---
         if (oldConfig.isConfigurationSection("item-settings")) {

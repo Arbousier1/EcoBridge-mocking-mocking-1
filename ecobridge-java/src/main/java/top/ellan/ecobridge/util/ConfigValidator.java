@@ -28,11 +28,10 @@ public class ConfigValidator {
         healthy &= checkRange(config, "economy.macro.heat-sensitivity", 0.01, 2.0, 0.5);
         healthy &= checkRange(config, "economy.macro.panic-threshold", 1.0, 1000.0, 50.0);
 
-        // --- 2. PID 控制器参数 (核心物理参数) ---
-        healthy &= checkRange(config, "economy.pid.kp", 0.0, 5.0, 0.5);
-        healthy &= checkRange(config, "economy.pid.ki", 0.0, 1.0, 0.1);
-        healthy &= checkRange(config, "economy.pid.kd", 0.0, 2.0, 0.05);
-        healthy &= checkRange(config, "economy.pid.lambda", 0.0, 1.0, 0.01);
+        // --- 2. 新控制器参数 (Predictive + Fuzzy + Sink/Faucet) ---
+        healthy &= checkRange(config, "economy.control.predictive.horizon-seconds", 60.0, 1209600.0, 259200.0);
+        healthy &= checkRange(config, "economy.control.lambda.min-multiplier", 0.1, 3.0, 0.6);
+        healthy &= checkRange(config, "economy.control.lambda.max-multiplier", 0.2, 5.0, 2.2);
 
         // --- 3. 基础市场参数 ---
         healthy &= checkRange(config, "economy.decay-rate", 0.0, 1.0, 0.05);

@@ -42,6 +42,8 @@ public class EconomyManager {
     // --- 采样与状态累加器 ---
     private final LongAdder circulationHeat = new LongAdder();      // 长期累积热度 (Micros)
     private final LongAdder tradeVolumeAccumulator = new LongAdder(); // 短期交易脉冲 (Micros)
+    private final LongAdder faucetAccumulator = new LongAdder();      // 周期产出 (Micros)
+    private final LongAdder sinkAccumulator = new LongAdder();        // 周期回收 (Micros)
     private final AtomicLong m1MoneySupplyMicros = new AtomicLong(0); // 货币发行总量 (Micros)
     
     private final AtomicLong lastVolatileTimestamp = new AtomicLong(System.currentTimeMillis());
@@ -131,6 +133,11 @@ public class EconomyManager {
             // 影响 M1 总量 (处理正负，用于货币增发/回收)
             long change = (long) (amount * PRECISION_SCALE);
             m1MoneySupplyMicros.addAndGet(change);
+            if (change > 0) {
+                faucetAccumulator.add(change);
+            } else if (change < 0) {
+                sinkAccumulator.add(-change);
+            }
             return;
         }
 
@@ -148,6 +155,24 @@ public class EconomyManager {
 
     public void recordTradeVolume(double amount) {
         onTransaction(amount, true);
+    }
+
+    public void recordFaucet(double amount) {
+        if (!Double.isFinite(amount) || amount <= 0.0) return;
+        onTransaction(Math.abs(amount), false);
+    }
+
+    public void recordSink(double amount) {
+        if (!Double.isFinite(amount) || amount <= 0.0) return;
+        onTransaction(-Math.abs(amount), false);
+    }
+
+    public long pollFaucetMicros() {
+        return faucetAccumulator.sumThenReset();
+    }
+
+    public long pollSinkMicros() {
+        return sinkAccumulator.sumThenReset();
     }
 
     // =================================================================================

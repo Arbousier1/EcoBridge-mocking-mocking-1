@@ -103,7 +103,11 @@ public class PricingManager {
         this.macroEngine.updateConfig(
             config.getDouble("economy.default-lambda", 0.002),
             config.getDouble("economy.tau", 7.0),
-            config.getDouble("economy.macro.target-velocity", 0.05)
+            config.getDouble("economy.macro.target-velocity", 0.05),
+            config.getDouble("economy.m1-supply", 10_000_000.0),
+            config.getDouble("economy.control.predictive.horizon-seconds", 259200.0),
+            config.getDouble("economy.control.lambda.min-multiplier", 0.60),
+            config.getDouble("economy.control.lambda.max-multiplier", 2.20)
         );
     }
 
