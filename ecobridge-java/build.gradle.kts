@@ -17,7 +17,10 @@ buildscript {
 
 plugins {
     `java-library`
+    checkstyle
     id("com.gradleup.shadow") version "9.3.1"
+    id("com.diffplug.spotless") version "6.25.0"
+    id("io.gitlab.arturbosch.detekt") version "1.23.8"
     idea
 }
 
@@ -285,6 +288,33 @@ repositories {
     flatDir { dirs("libs") }
 }
 
+checkstyle {
+    toolVersion = "10.18.2"
+    configFile = file("$rootDir/config/checkstyle/checkstyle.xml")
+    isShowViolations = true
+}
+
+spotless {
+    java {
+        target(
+            "src/main/java/top/ellan/ecobridge/integration/platform/**/*.java",
+            "src/main/java/top/ellan/ecobridge/application/bootstrap/**/*.java",
+            "src/test/java/top/ellan/ecobridge/test/**/*.java"
+        )
+        googleJavaFormat("1.22.0")
+        removeUnusedImports()
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    allRules = false
+    source.setFrom(files("src/main/kotlin", "src/test/kotlin"))
+    config.setFrom(file("$rootDir/config/detekt/detekt.yml"))
+}
+
 dependencies {
     // Paper & 核心依赖
     compileOnly("io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT")
@@ -392,4 +422,8 @@ tasks.withType<ProcessResources> {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.named("check") {
+    dependsOn("spotlessCheck", "checkstyleMain", "checkstyleTest", "detekt")
 }

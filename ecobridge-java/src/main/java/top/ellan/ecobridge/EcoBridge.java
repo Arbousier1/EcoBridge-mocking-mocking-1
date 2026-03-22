@@ -12,11 +12,12 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.NotNull;
 import top.ellan.ecobridge.api.EcoLimitAPI;
+import top.ellan.ecobridge.application.bootstrap.CoreServiceLifecycle;
+import top.ellan.ecobridge.application.bootstrap.InfrastructureLifecycle;
 import top.ellan.ecobridge.infrastructure.ffi.bridge.NativeBridge;
 import top.ellan.ecobridge.infrastructure.cache.HotDataCache;
 import top.ellan.ecobridge.integration.platform.command.AdminCommand; 
 import top.ellan.ecobridge.integration.platform.command.TransferCommand;
-import top.ellan.ecobridge.infrastructure.persistence.database.DatabaseManager;
 import top.ellan.ecobridge.integration.platform.hook.EcoPlaceholderExpansion;
 import top.ellan.ecobridge.integration.platform.hook.UltimateShopHook;
 import top.ellan.ecobridge.integration.platform.asm.EcoShopTransformer; 
@@ -24,11 +25,8 @@ import top.ellan.ecobridge.integration.platform.listener.CacheListener;
 import top.ellan.ecobridge.integration.platform.listener.CoinsEngineListener;
 import top.ellan.ecobridge.integration.platform.listener.CommandHijacker;
 import top.ellan.ecobridge.application.service.*;
-import top.ellan.ecobridge.infrastructure.persistence.redis.RedisManager;
 import top.ellan.ecobridge.infrastructure.persistence.storage.ActivityCollector;
-import top.ellan.ecobridge.infrastructure.persistence.storage.AsyncLogger;
-import top.ellan.ecobridge.application.service.ItemConfigManager; // 确保导入
-import top.ellan.ecobridge.util.HolidayManager;
+import top.ellan.ecobridge.application.service.ItemConfigManager; // 纭繚瀵煎叆
 import top.ellan.ecobridge.util.LogUtil;
 import top.ellan.ecobridge.util.UltimateShopImporter;
 
@@ -46,8 +44,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * EcoBridge v1.6.7 - Config Safety Patch
  * <p>
- * 更新记录:
- * 1. [Config] 禁用自动配置迁移和覆盖，保护用户手动修改的 config.yml。
+ * 鏇存柊璁板綍:
+ * 1. [Config] 绂佺敤鑷姩閰嶇疆杩佺Щ鍜岃鐩栵紝淇濇姢鐢ㄦ埛鎵嬪姩淇敼鐨?config.yml銆?
  */
 public final class EcoBridge extends JavaPlugin implements Listener {
 
@@ -58,69 +56,63 @@ public final class EcoBridge extends JavaPlugin implements Listener {
     private ExecutorService virtualExecutor;
     private final AtomicBoolean fullyInitialized = new AtomicBoolean(false);
     
-    // 影子模式状态控制
+    // 褰卞瓙妯″紡鐘舵€佹帶鍒?
     private final AtomicBoolean shadowMode = new AtomicBoolean(false);
 
     @Override
     public void onEnable() {
         instance = this;
 
-        // 1. 初始化 Java 25 虚拟线程池
+        // 1. 鍒濆鍖?Java 25 铏氭嫙绾跨▼姹?
         this.virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
-        // 2. 引导基础架构
+        // 2. 寮曞鍩虹鏋舵瀯
         try {
             LogUtil.init();
             
-            // [修改 1] 禁止自动覆盖配置：仅当文件不存在时才创建
+            // [淇敼 1] 绂佹鑷姩瑕嗙洊閰嶇疆锛氫粎褰撴枃浠朵笉瀛樺湪鏃舵墠鍒涘缓
             if (!getDataFolder().exists()) getDataFolder().mkdirs();
             if (!new java.io.File(getDataFolder(), "config.yml").exists()) {
                 saveDefaultConfig();
             }
             
-            // [修改 2] 禁用迁移器：防止它“修复”或“重置”你的配置注释和数值
+            // [淇敼 2] 绂佺敤杩佺Щ鍣細闃叉瀹冣€滀慨澶嶁€濇垨鈥滈噸缃€濅綘鐨勯厤缃敞閲婂拰鏁板€?
             // ConfigMigrator.checkAndMigrate(this);
             
-            // [关键修复] 在引导基础设施前，优先初始化物品配置管理器
-            // 确保后续 LimitManager 加载时 items.yml 已就绪
+            // [鍏抽敭淇] 鍦ㄥ紩瀵煎熀纭€璁炬柦鍓嶏紝浼樺厛鍒濆鍖栫墿鍝侀厤缃鐞嗗櫒
+            // 纭繚鍚庣画 LimitManager 鍔犺浇鏃?items.yml 宸插氨缁?
             ItemConfigManager.init(this);
             
             bootstrapInfrastructure();
-            ActivityCollector.startHeartbeat(this); // 保持原有命名习惯
+            ActivityCollector.startHeartbeat(this); // 淇濇寔鍘熸湁鍛藉悕涔犳儻
             
-            // 注册 ASM 转换器
+            // 娉ㄥ唽 ASM 杞崲鍣?
             setupBytecodeTransformer();
             
         } catch (Exception e) {
-            getLogger().severe("基础架构引导失败: " + e.getMessage());
+            getLogger().severe("鍩虹鏋舵瀯寮曞澶辫触: " + e.getMessage());
             e.printStackTrace();
             Bukkit.getPluginManager().disablePlugin(this);
             return;
         }
 
-        // 3. 环境与依赖校验
+        // 3. 鐜涓庝緷璧栨牎楠?
         if (!verifyDependencies()) return;
 
-        // 4. 组件加载拓扑
+        // 4. 缁勪欢鍔犺浇鎷撴墤
         try {
-            EconomyManager.init(this);
-            NativeBridge.init(this);
-            EconomicStateManager.init(this);
-            PricingManager.init(this);
-            TransferManager.init(this);
-            
-            // LimitManager 依赖 ItemConfigManager，此时已安全
-            limitAPI = new LimitManager(this);
+            // LimitManager 渚濊禆 ItemConfigManager锛屾鏃跺凡瀹夊叏
+            limitAPI = CoreServiceLifecycle.start(this);
 
-            // 5. 核心业务注册 (动态注册适配 Paper)
+            // 5. 鏍稿績涓氬姟娉ㄥ唽 (鍔ㄦ€佹敞鍐岄€傞厤 Paper)
             registerCommands(); 
             registerListeners();
             registerHooks();
 
-            // 执行物理指令劫持，锁定全服转账入口
+            // 鎵ц鐗╃悊鎸囦护鍔寔锛岄攣瀹氬叏鏈嶈浆璐﹀叆鍙?
             new CommandHijacker(this).hijackAllCurrencies();
 
-            // [新增] 启动时自动从 UltimateShop 导入商品数据
+            // [鏂板] 鍚姩鏃惰嚜鍔ㄤ粠 UltimateShop 瀵煎叆鍟嗗搧鏁版嵁
             if (getServer().getPluginManager().isPluginEnabled("UltimateShop")) {
                 double defaultLambda = getConfig().getDouble("economy.default-lambda", 0.002);
                 UltimateShopImporter.runImport(defaultLambda);
@@ -128,11 +120,11 @@ public final class EcoBridge extends JavaPlugin implements Listener {
 
             this.fullyInitialized.set(true);
             
-            // 打印 Banner
+            // 鎵撳嵃 Banner
             printSummaryBanner();
 
         } catch (Throwable e) {
-            LogUtil.error("致命错误: 初始化拓扑崩溃", e);
+            LogUtil.error("鑷村懡閿欒: 鍒濆鍖栨嫇鎵戝穿婧?, e);
             Bukkit.getPluginManager().disablePlugin(this);
         }
     }
@@ -144,8 +136,8 @@ public final class EcoBridge extends JavaPlugin implements Listener {
     }
 
     /**
-     * [新增] 安全的状态检查方法
-     * 用于防止异步任务(如 Caffeine 回调)在插件关闭后访问实例导致崩溃
+     * [鏂板] 瀹夊叏鐨勭姸鎬佹鏌ユ柟娉?
+     * 鐢ㄤ簬闃叉寮傛浠诲姟(濡?Caffeine 鍥炶皟)鍦ㄦ彃浠跺叧闂悗璁块棶瀹炰緥瀵艰嚧宕╂簝
      */
     public static boolean isInitialized() {
         return instance != null;
@@ -170,49 +162,36 @@ public final class EcoBridge extends JavaPlugin implements Listener {
     }
 
     // ========================================================================================
-    // 基础设施与生命周期管理
+    // 鍩虹璁炬柦涓庣敓鍛藉懆鏈熺鐞?
     // ========================================================================================
 
     private void bootstrapInfrastructure() {
-        DatabaseManager.init();
-        AsyncLogger.init(this);
-        HolidayManager.init();
-        RedisManager.init(this);
+        InfrastructureLifecycle.start(this);
     }
 
     private void shutdownSequence() {
-        sendConsole("<yellow>[EcoBridge] 正在启动安全关机序列...");
+        sendConsole("<yellow>[EcoBridge] 姝ｅ湪鍚姩瀹夊叏鍏虫満搴忓垪...");
 
         if (fullyInitialized.getAndSet(false)) {
             try {
-                if (RedisManager.getInstance() != null) RedisManager.getInstance().shutdown();
-                HolidayManager.shutdown();
-
-                if (PricingManager.getInstance() != null) PricingManager.getInstance().shutdown();
-                if (EconomyManager.getInstance() != null) EconomyManager.getInstance().shutdown();
-                if (TransferManager.getInstance() != null) TransferManager.getInstance().shutdown();
-
-                if (AsyncLogger.getInstance() != null) AsyncLogger.getInstance().shutdown();
+                CoreServiceLifecycle.stop();
                 
-                LogUtil.info("正在执行缓存强制持久化...");
+                LogUtil.info("姝ｅ湪鎵ц缂撳瓨寮哄埗鎸佷箙鍖?..");
                 HotDataCache.saveAllSync();
 
-                NativeBridge.shutdown();
 
             } catch (Exception e) {
-                getLogger().severe("关机期间异常: " + e.getMessage());
+                getLogger().severe("鍏虫満鏈熼棿寮傚父: " + e.getMessage());
             }
         }
 
         terminateVirtualPool();
 
-        try {
-            DatabaseManager.close();
-        } catch (Exception ignored) {}
+        InfrastructureLifecycle.stop();
 
         getServer().getScheduler().cancelTasks(this);
         
-        sendConsole("<red>[EcoBridge] 系统资源回收完毕。");
+        sendConsole("<red>[EcoBridge] 绯荤粺璧勬簮鍥炴敹瀹屾瘯銆?);
     }
 
     private void terminateVirtualPool() {
@@ -230,7 +209,7 @@ public final class EcoBridge extends JavaPlugin implements Listener {
     }
 
     private void setupBytecodeTransformer() {
-        LogUtil.info("<aqua>正在注入 ASM 拦截器 (v1.6.2 Redirection)...</aqua>");
+        LogUtil.info("<aqua>姝ｅ湪娉ㄥ叆 ASM 鎷︽埅鍣?(v1.6.2 Redirection)...</aqua>");
         try {
             Instrumentation inst = getInstrumentation();
             if (inst != null) {
@@ -239,16 +218,16 @@ public final class EcoBridge extends JavaPlugin implements Listener {
                 for (Class<?> clazz : inst.getAllLoadedClasses()) {
                     if (clazz.getName().equals("cn.superiormc.ultimateshop.objects.buttons.ObjectItem")) {
                         inst.retransformClasses(clazz);
-                        LogUtil.info("已完成对 ObjectItem (UltimateShop) 的动态逻辑重定向。");
+                        LogUtil.info("宸插畬鎴愬 ObjectItem (UltimateShop) 鐨勫姩鎬侀€昏緫閲嶅畾鍚戙€?);
                         break;
                     }
                 }
-                LogUtil.info("<green>✔ ASM 内核挂载成功。");
+                LogUtil.info("<green>鉁?ASM 鍐呮牳鎸傝浇鎴愬姛銆?);
             } else {
-                LogUtil.warn("未检测到 Instrumentation，建议检查 Agent 配置。");
+                LogUtil.warn("鏈娴嬪埌 Instrumentation锛屽缓璁鏌?Agent 閰嶇疆銆?);
             }
         } catch (Exception e) {
-            LogUtil.error("ASM 注入过程发生致命错误", e);
+            LogUtil.error("ASM 娉ㄥ叆杩囩▼鍙戠敓鑷村懡閿欒", e);
         }
     }
 
@@ -265,7 +244,7 @@ public final class EcoBridge extends JavaPlugin implements Listener {
     private boolean verifyDependencies() {
         var pm = Bukkit.getPluginManager();
         if (!pm.isPluginEnabled("CoinsEngine")) {
-            sendConsole("<red>致命错误: 未检测到必要依赖 CoinsEngine。");
+            sendConsole("<red>鑷村懡閿欒: 鏈娴嬪埌蹇呰渚濊禆 CoinsEngine銆?);
             pm.disablePlugin(this);
             return false;
         }
@@ -303,7 +282,7 @@ public final class EcoBridge extends JavaPlugin implements Listener {
 
             commandMap.register("ecobridge", new DynamicCommand(
                 "ecopay",
-                "通过 Rust 物理内核审计发起受监管的转账",
+                "閫氳繃 Rust 鐗╃悊鍐呮牳瀹¤鍙戣捣鍙楃洃绠＄殑杞处",
                 "/ecopay <player> <amount>",
                 Arrays.asList("epay", "auditpay"),
                 "ecobridge.command.transfer",
@@ -312,17 +291,17 @@ public final class EcoBridge extends JavaPlugin implements Listener {
 
             commandMap.register("ecobridge", new DynamicCommand(
                 "ecoadmin",
-                "EcoBridge 核心管理指令 (Native内核控制/重载/影子模式切换)",
+                "EcoBridge 鏍稿績绠＄悊鎸囦护 (Native鍐呮牳鎺у埗/閲嶈浇/褰卞瓙妯″紡鍒囨崲)",
                 "/ecoadmin <shadow|reload|import>",
                 Arrays.asList("eb", "eco"),
                 "ecobridge.admin",
                 new AdminCommand()
             ));
             
-            LogUtil.info("Paper 模式动态指令注册完成。");
+            LogUtil.info("Paper 妯″紡鍔ㄦ€佹寚浠ゆ敞鍐屽畬鎴愩€?);
 
         } catch (Exception e) {
-            LogUtil.error("动态指令注册失败 (Paper Mode)", e);
+            LogUtil.error("鍔ㄦ€佹寚浠ゆ敞鍐屽け璐?(Paper Mode)", e);
         }
     }
 
@@ -344,19 +323,16 @@ public final class EcoBridge extends JavaPlugin implements Listener {
     public void reload() {
         reloadConfig();
         
-        // [修复] 重载物品配置，确保最新 items.yml 被加载
+        // [淇] 閲嶈浇鐗╁搧閰嶇疆锛岀‘淇濇渶鏂?items.yml 琚姞杞?
         ItemConfigManager.reload();
         
-        // [修改 3] 重载时禁用迁移检查，防止“修复”配置
+        // [淇敼 3] 閲嶈浇鏃剁鐢ㄨ縼绉绘鏌ワ紝闃叉鈥滀慨澶嶁€濋厤缃?
         // ConfigMigrator.checkAndMigrate(this);
         
         LogUtil.init();
-        if (EconomyManager.getInstance() != null) EconomyManager.getInstance().loadState();
-        if (PricingManager.getInstance() != null) PricingManager.getInstance().loadConfig();
-        if (TransferManager.getInstance() != null) TransferManager.getInstance().loadConfig();
-        if (limitAPI != null) limitAPI.reloadCache();
+        CoreServiceLifecycle.reload((LimitManager) limitAPI);
 
-        // [新增] 重载时自动再次同步 UltimateShop 数据
+        // [鏂板] 閲嶈浇鏃惰嚜鍔ㄥ啀娆″悓姝?UltimateShop 鏁版嵁
         if (getServer().getPluginManager().isPluginEnabled("UltimateShop")) {
             double defaultLambda = getConfig().getDouble("economy.default-lambda", 0.002);
             UltimateShopImporter.runImport(defaultLambda);
@@ -390,14 +366,14 @@ public final class EcoBridge extends JavaPlugin implements Listener {
         String textGradient = "<gradient:white:gray>";
         int boxWidth = 55;
 
-        sendConsole(borderGradient + buildBorder("┏", "━", "┓", boxWidth) + "</gradient>");
+        sendConsole(borderGradient + buildBorder("鈹?, "鈹?, "鈹?, boxWidth) + "</gradient>");
         
         for (String line : lines) {
             String centeredLine = centerText(line, boxWidth - 4); 
-            sendConsole(borderGradient + "┃ <reset>" + textGradient + centeredLine + "</gradient>" + borderGradient + " ┃</gradient>");
+            sendConsole(borderGradient + "鈹?<reset>" + textGradient + centeredLine + "</gradient>" + borderGradient + " 鈹?/gradient>");
         }
         
-        sendConsole(borderGradient + buildBorder("┗", "━", "┛", boxWidth) + "</gradient>");
+        sendConsole(borderGradient + buildBorder("鈹?, "鈹?, "鈹?, boxWidth) + "</gradient>");
     }
 
     private String buildBorder(String left, String mid, String right, int width) {

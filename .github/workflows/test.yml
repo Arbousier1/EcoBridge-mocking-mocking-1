@@ -89,7 +89,7 @@ jobs:
       working-directory: ./ecobridge-java
       run: |
         chmod +x gradlew
-        ./gradlew clean shadowJar --no-daemon --build-cache
+        ./gradlew clean check shadowJar --no-daemon --build-cache
 
     # --- 6. 搭建 Paper 测试服务器 (API Mode) ---
     - name: Setup Paper Server Environment
