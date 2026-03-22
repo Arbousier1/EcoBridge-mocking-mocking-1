@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 env:
-  # 全局禁用增量编译，这对所有 OS 的 CI 缓存稳定性都有好处
   CARGO_INCREMENTAL: 0
 
 jobs:
@@ -18,14 +17,13 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact_name: libecobridge_rust.so
-            rust_flags: "" # Linux 不需要额外链接参数
+            rust_flags: ""
           - os: windows-latest
             artifact_name: ecobridge_rust.dll
-            # 🔥 仅为 Windows 分配 MSVC 专用优化参数
             rust_flags: "-C link-arg=/DEBUG:NONE"
           - os: macos-latest
             artifact_name: libecobridge_rust.dylib
-            rust_flags: "" # macOS 不需要
+            rust_flags: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -33,26 +31,35 @@ jobs:
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Restore Rust Native Cache
+        id: rust-native-cache
+        uses: actions/cache@v4
+        with:
+          path: ecobridge-rust/target/release
+          key: rust-native-${{ matrix.os }}-${{ hashFiles('ecobridge-rust/Cargo.toml', 'ecobridge-rust/Cargo.lock', 'ecobridge-rust/build.rs', 'ecobridge-rust/ecobridge_rust.h', 'ecobridge-rust/src/**') }}
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "ecobridge-rust"
-          # 提升前缀版本以清理旧的、错误的缓存数据
           prefix-key: "v2-rust-${{ matrix.os }}"
 
       - name: Build Rust Library (Release)
+        if: steps.rust-native-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           cd ecobridge-rust
-          # 动态注入当前 OS 对应的参数
           export RUSTFLAGS="${{ matrix.rust_flags }}"
           cargo build --release
+
+      - name: Reuse Cached Rust Library
+        if: steps.rust-native-cache.outputs.cache-hit == 'true'
+        run: echo "Rust native cache hit, skip cargo build."
 
       - name: Prepare Artifact
         shell: bash
         run: |
           mkdir -p dist
-          # 必须带上头文件，否则 Java 端的 jextract 没法生成代码
           cp ecobridge-rust/ecobridge_rust.h dist/
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cp ecobridge-rust/target/release/ecobridge_rust.dll dist/
@@ -77,7 +84,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           java-version: '25'
-          distribution: 'oracle' 
+          distribution: 'oracle'
 
       - name: Install LLVM/Clang
         run: |
@@ -92,17 +99,14 @@ jobs:
 
       - name: Sync Assets to Java Environment
         run: |
-          # 1. 移动二进制库到 resources
           mkdir -p ecobridge-java/src/main/resources/
           cp temp-assets/*.dll temp-assets/*.so temp-assets/*.dylib ecobridge-java/src/main/resources/
-          
-          # 2. 恢复头文件，供 jextract 扫描
+
           mkdir -p ecobridge-rust/
           cp temp-assets/ecobridge_rust.h ecobridge-rust/
 
       - name: Setup jextract
         run: |
-          # 下载适用于 Linux 的 jextract
           wget https://download.java.net/java/early_access/jextract/22/3/openjdk-22-jextract+3-13_linux-x64_bin.tar.gz
           tar -xzf openjdk-22-jextract+3-13_linux-x64_bin.tar.gz
           echo "$(pwd)/jextract-22/bin" >> $GITHUB_PATH
@@ -112,7 +116,6 @@ jobs:
         run: |
           cd ecobridge-java
           chmod +x gradlew
-          # Quality gate + build
           ./gradlew check shadowJar --refresh-dependencies
         env:
           ORG_GRADLE_PROJECT_version: ${{ github.ref_name }}
