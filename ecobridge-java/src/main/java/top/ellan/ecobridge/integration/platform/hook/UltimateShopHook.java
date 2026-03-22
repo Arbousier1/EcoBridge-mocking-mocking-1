@@ -11,7 +11,6 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
-import top.ellan.ecobridge.EcoBridge;
 import top.ellan.ecobridge.application.service.LimitManager;
 import top.ellan.ecobridge.application.service.PricingManager;
 import top.ellan.ecobridge.application.service.TransferManager;
@@ -34,13 +33,11 @@ public class UltimateShopHook implements Listener {
     private final TransferManager transferManager;
     private final PricingManager pricingManager;
     private final LimitManager limitManager;
-    private final double sellRatio;
 
     public UltimateShopHook(TransferManager transferManager, PricingManager pricingManager, LimitManager limitManager) {
         this.transferManager = transferManager;
         this.pricingManager = pricingManager;
         this.limitManager = limitManager;
-        this.sellRatio = EcoBridge.getInstance().getConfig().getDouble("economy.sell-ratio", 0.5);
     }
 
     @EventHandler
@@ -59,7 +56,7 @@ public class UltimateShopHook implements Listener {
         if (usItem == null || player == null) return;
 
         String productId = usItem.getProduct();
-        String uuidStr = player.getUniqueId().toString();
+        String shopId = usItem.getShop();
 
         if (isBuy) {
             if (limitManager.isBlockedByDynamicLimit(player.getUniqueId(), productId, amount)) {
@@ -67,7 +64,7 @@ public class UltimateShopHook implements Listener {
                 return;
             }
 
-            double dynamicUnitPrice = pricingManager.getSnapshotPrice(uuidStr, productId);
+            double dynamicUnitPrice = pricingManager.calculateBuyPrice(shopId, productId);
 
             if (dynamicUnitPrice > 0) {
                 double totalBasePrice = dynamicUnitPrice * amount;
@@ -95,10 +92,10 @@ public class UltimateShopHook implements Listener {
                 return;
             }
 
-            double dynamicUnitPrice = pricingManager.getSnapshotPrice(uuidStr, productId);
+            double dynamicUnitPrice = pricingManager.calculateSellPrice(shopId, productId);
 
             if (dynamicUnitPrice > 0) {
-                double finalPayout = dynamicUnitPrice * amount * sellRatio;
+                double finalPayout = dynamicUnitPrice * amount;
                 GiveResult originalGive = event.getGiveResult();
                 modifyMoneyInResult(originalGive.getResultMap(), finalPayout);
             }

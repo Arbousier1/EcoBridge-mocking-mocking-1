@@ -118,6 +118,130 @@ val generateBindings = tasks.register<Exec>("generateBindings") {
         doLast { generatedSourceDir.get().asFile.mkdirs() }
     }
 
+val generateFallbackBindings = tasks.register("generateFallbackBindings") {
+    group = "build"
+    description = "Generate fallback Panama layout bindings when jextract is unavailable."
+    doLast {
+        val genRoot = generatedSourceDir.get().asFile
+        val packageDir = File(genRoot, targetPackage.replace('.', '/'))
+        packageDir.mkdirs()
+
+        val existingJava = packageDir.listFiles()?.any { it.extension == "java" } == true
+        if (existingJava) {
+            println("ℹ️ Existing generated bindings detected, skip fallback generation.")
+            return@doLast
+        }
+
+        fun writeClass(name: String, body: String) {
+            File(packageDir, "$name.java").writeText(
+                """
+                package $targetPackage;
+
+                import java.lang.foreign.MemoryLayout;
+                import static java.lang.foreign.ValueLayout.*;
+
+                public final class $name {
+                    private $name() {}
+
+                    public static MemoryLayout layout() {
+                        return $body;
+                    }
+                }
+                """.trimIndent() + System.lineSeparator(),
+                Charsets.UTF_8
+            )
+        }
+
+        writeClass("TradeContext", """
+MemoryLayout.structLayout(
+        JAVA_LONG.withName("base_price_micros"),
+        JAVA_LONG.withName("current_amount"),
+        JAVA_DOUBLE.withName("inflation_rate"),
+        JAVA_LONG.withName("current_timestamp"),
+        JAVA_LONG.withName("play_time_seconds"),
+        JAVA_INT.withName("timezone_offset"),
+        JAVA_INT.withName("newbie_mask"),
+        JAVA_DOUBLE.withName("market_heat"),
+        JAVA_DOUBLE.withName("eco_saturation")
+)
+        """.trimIndent())
+
+        writeClass("MarketConfig", """
+MemoryLayout.structLayout(
+        JAVA_DOUBLE.withName("base_lambda"),
+        JAVA_DOUBLE.withName("volatility_factor"),
+        JAVA_DOUBLE.withName("seasonal_amplitude"),
+        JAVA_DOUBLE.withName("weekend_multiplier"),
+        JAVA_DOUBLE.withName("newbie_protection_rate"),
+        JAVA_DOUBLE.withName("seasonal_weight"),
+        JAVA_DOUBLE.withName("weekend_weight"),
+        JAVA_DOUBLE.withName("newbie_weight"),
+        JAVA_DOUBLE.withName("inflation_weight")
+)
+        """.trimIndent())
+
+        writeClass("TransferResult", """
+MemoryLayout.structLayout(
+        JAVA_LONG.withName("final_tax_micros"),
+        JAVA_INT.withName("is_blocked"),
+        JAVA_INT.withName("warning_code")
+)
+        """.trimIndent())
+
+        writeClass("TransferContext", """
+MemoryLayout.structLayout(
+        JAVA_LONG.withName("amount_micros"),
+        JAVA_LONG.withName("sender_balance"),
+        JAVA_LONG.withName("receiver_balance"),
+        JAVA_DOUBLE.withName("inflation_rate"),
+        JAVA_LONG.withName("item_base_limit"),
+        JAVA_DOUBLE.withName("item_growth_rate"),
+        JAVA_LONG.withName("item_max_limit"),
+        JAVA_LONG.withName("sender_play_time"),
+        JAVA_LONG.withName("receiver_play_time"),
+        JAVA_DOUBLE.withName("sender_activity_score"),
+        JAVA_DOUBLE.withName("sender_velocity"),
+        JAVA_LONG.withName("_padding")
+)
+        """.trimIndent())
+
+        writeClass("RegulatorConfig", """
+MemoryLayout.structLayout(
+        JAVA_DOUBLE.withName("base_tax_rate"),
+        JAVA_LONG.withName("luxury_threshold"),
+        JAVA_DOUBLE.withName("luxury_tax_rate"),
+        JAVA_DOUBLE.withName("wealth_gap_tax_rate"),
+        JAVA_LONG.withName("poor_threshold"),
+        JAVA_LONG.withName("rich_threshold"),
+        JAVA_DOUBLE.withName("_reserved"),
+        JAVA_DOUBLE.withName("warning_ratio"),
+        JAVA_LONG.withName("warning_min_amount"),
+        JAVA_DOUBLE.withName("newbie_hours"),
+        JAVA_DOUBLE.withName("veteran_hours"),
+        JAVA_DOUBLE.withName("velocity_threshold")
+)
+        """.trimIndent())
+
+        writeClass("PidState", """
+MemoryLayout.structLayout(
+        JAVA_DOUBLE.withName("kp"),
+        JAVA_DOUBLE.withName("ki"),
+        JAVA_DOUBLE.withName("kd"),
+        JAVA_DOUBLE.withName("lambda"),
+        JAVA_DOUBLE.withName("integral"),
+        JAVA_DOUBLE.withName("prev_pv"),
+        JAVA_DOUBLE.withName("filtered_d"),
+        JAVA_DOUBLE.withName("integration_limit"),
+        JAVA_INT.withName("is_saturated"),
+        JAVA_INT.withName("_padding")
+)
+        """.trimIndent())
+
+        println("✅ Fallback bindings generated at: ${packageDir.absolutePath}")
+    }
+    outputs.dir(generatedSourceDir)
+}
+
 idea {
     module {
         generatedSourceDirs.add(generatedSourceDir.get().asFile)
@@ -133,7 +257,7 @@ java {
 
 sourceSets {
     main {
-        java.srcDir(generateBindings)
+        java.srcDir(generatedSourceDir)
     }
 }
 
@@ -202,7 +326,7 @@ dependencies {
 }
 
 tasks.withType<JavaCompile> {
-    dependsOn(generateBindings, prepareGeneratedDir)
+    dependsOn(generateBindings, prepareGeneratedDir, generateFallbackBindings)
     options.encoding = "UTF-8"
     options.release.set(25)
     options.compilerArgs.addAll(listOf(

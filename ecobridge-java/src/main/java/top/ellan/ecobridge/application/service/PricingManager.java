@@ -126,31 +126,56 @@ public class PricingManager {
      * 获取宏观快照价格 (不包含微观滑点)
      */
     public double getSnapshotPrice(String shopId, String productId) {
+        if (productId == null || productId.isBlank()) return -1.0;
         Map<String, Double> current = macroEngine.getCurrentSnapshot();
         if (current == null) return -1.0;
 
         if (shopId == null) {
-            // 模糊匹配：尝试查找该 productId 对应的任意价格
+            String suffix = "." + productId;
             return current.entrySet().stream()
-                    .filter(e -> e.getKey().endsWith("." + productId))
+                    .filter(e -> e.getKey().regionMatches(true,
+                            Math.max(0, e.getKey().length() - suffix.length()),
+                            suffix,
+                            0,
+                            suffix.length()))
                     .map(Map.Entry::getValue)
                     .findFirst()
                     .orElse(-1.0);
         }
-        return current.getOrDefault(shopId + "." + productId, -1.0);
+
+        String fullKey = shopId + "." + productId;
+        Double direct = current.get(fullKey);
+        if (direct != null) return direct;
+
+        return current.entrySet().stream()
+                .filter(e -> e.getKey().equalsIgnoreCase(fullKey))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse(-1.0);
     }
 
     /**
      * 计算买入价 (Macro Price)
      * 优先使用 PID 计算出的宏观价格，如果未就绪则降级到默认值。
      */
-    public double calculateBuyPrice(String productId) {
-        double dynamicPrice = getSnapshotPrice(null, productId);
+    public double calculateBuyPrice(String shopId, String productId) {
+        double dynamicPrice = getSnapshotPrice(shopId, productId);
+        if (dynamicPrice <= 0 && shopId != null) {
+            dynamicPrice = getSnapshotPrice(null, productId);
+        }
         return (dynamicPrice <= 0) ? 100.0 : dynamicPrice; // 100.0 为默认兜底价
     }
 
+    public double calculateBuyPrice(String productId) {
+        return calculateBuyPrice(null, productId);
+    }
+
+    public double calculateSellPrice(String shopId, String productId) {
+        return calculateBuyPrice(shopId, productId) * this.sellRatio;
+    }
+
     public double calculateSellPrice(String productId) {
-        return calculateBuyPrice(productId) * this.sellRatio;
+        return calculateSellPrice(null, productId);
     }
 
     /**
