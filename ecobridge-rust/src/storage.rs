@@ -295,7 +295,7 @@ pub fn query_neff_from_db(current_ts: i64, tau: f64) -> f64 {
         pool_sender: pool.recycle.clone(),
     };
 
-    let query = "SELECT SUM(ABS(delta) * EXP( -1.0 * (?1 - ts) / (?2 * 86400000.0) )) FROM economy_log WHERE ts > ?3";
+    let query = "SELECT SUM(delta * EXP( -1.0 * (?1 - ts) / (?2 * 86400000.0) )) FROM economy_log WHERE ts > ?3";
     let ms_per_day = 86_400_000.0;
     let safe_lookback_ms = (tau * ms_per_day * 3.0) as i64;
     let min_ts = current_ts - safe_lookback_ms;
@@ -327,7 +327,7 @@ pub fn load_recent_history(days: i64) -> Vec<crate::models::HistoryRecord> {
         Ok(crate::models::HistoryRecord {
             timestamp: row.get(0)?,
             // [Precision Fix]: 字段重命名并转换单位
-            amount_micros: (amt_f64.abs() * 1_000_000.0) as i64,
+            amount_micros: (amt_f64 * 1_000_000.0) as i64,
         })
     }).unwrap();
 

@@ -163,7 +163,8 @@ pub unsafe extern "C" fn ecobridge_log_to_duckdb(
         let amount_f64 = (trade_amount_micros as f64) / MICROS_SCALE;
         let balance_f64 = (balance_micros as f64) / MICROS_SCALE;
         
-        economy::summation::append_trade_to_memory(ts, amount_f64.abs());
+        // Keep trade direction: buy<0, sell>0. Directional neff needs signed flow.
+        economy::summation::append_trade_to_memory(ts, amount_f64);
         storage::log_economy_event(ts, uuid, amount_f64, balance_f64, meta);
         
         EconStatus::Ok
@@ -177,7 +178,7 @@ pub unsafe extern "C" fn ecobridge_log_to_duckdb(
 #[no_mangle]
 pub extern "C" fn inject_remote_trade(amount_micros: c_longlong) -> c_int {
     ffi_guard!(|| {
-        REMOTE_FLOW_ACCUMULATOR_MICROS.fetch_add(amount_micros.abs(), Ordering::SeqCst);
+        REMOTE_FLOW_ACCUMULATOR_MICROS.fetch_add(amount_micros, Ordering::SeqCst);
         EconStatus::Ok
     })
 }
