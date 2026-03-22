@@ -3,9 +3,6 @@ package top.ellan.ecobridge.integration.platform.compat;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Locale;
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.inventory.ItemStack;
-import top.ellan.ecobridge.util.LogUtil;
 
 /** Centralized compatibility resolver for UltimateShop API drift. */
 public final class UltimateShopCompat {
@@ -59,19 +56,22 @@ public final class UltimateShopCompat {
     if (!UNKNOWN.equals(byMethod)) return byMethod;
 
     Object configObj = invokeNoArg(item, "getItemConfig");
-    if (configObj instanceof ConfigurationSection section) {
-      String sectionName = normalizeString(section.getName());
-      if (!UNKNOWN.equals(sectionName)) return sectionName;
+    if (configObj != null) {
+      String sectionName = normalizeString(invokeNoArg(configObj, "getName"));
+      if (!UNKNOWN.equals(sectionName)) {
+        return sectionName;
+      }
     }
 
-    Object displayObj =
-        invokeMethod(
-            item,
-            "getDisplayItem",
-            new Class<?>[] {org.bukkit.entity.Player.class},
-            new Object[] {null});
-    if (displayObj instanceof ItemStack stack && stack.getType() != null) {
-      return normalizeString(stack.getType().name());
+    Object displayObj = invokeDisplayItem(item);
+    if (displayObj != null) {
+      Object typeObj = invokeNoArg(displayObj, "getType");
+      if (typeObj != null) {
+        String materialName = normalizeString(invokeNoArg(typeObj, "name"));
+        if (!UNKNOWN.equals(materialName)) {
+          return materialName;
+        }
+      }
     }
 
     return UNKNOWN;
@@ -90,7 +90,13 @@ public final class UltimateShopCompat {
       Method method = target.getClass().getMethod(methodName);
       return method.invoke(target);
     } catch (Exception ignored) {
-      return null;
+      try {
+        Method declared = target.getClass().getDeclaredMethod(methodName);
+        declared.setAccessible(true);
+        return declared.invoke(target);
+      } catch (Exception ignoredAgain) {
+        return null;
+      }
     }
   }
 
@@ -101,7 +107,13 @@ public final class UltimateShopCompat {
       Method method = target.getClass().getMethod(methodName, argsTypes);
       return method.invoke(target, args);
     } catch (Exception ignored) {
-      return null;
+      try {
+        Method declared = target.getClass().getDeclaredMethod(methodName, argsTypes);
+        declared.setAccessible(true);
+        return declared.invoke(target, args);
+      } catch (Exception ignoredAgain) {
+        return null;
+      }
     }
   }
 
@@ -112,8 +124,22 @@ public final class UltimateShopCompat {
       field.setAccessible(true);
       return field.get(target);
     } catch (Exception e) {
-      LogUtil.debug("UltimateShopCompat field read failed: " + fieldName);
       return null;
     }
+  }
+
+  private static Object invokeDisplayItem(Object item) {
+    // Prefer exact signature when Bukkit Player class is available.
+    try {
+      Class<?> playerClass = Class.forName("org.bukkit.entity.Player");
+      return invokeMethod(
+          item, "getDisplayItem", new Class<?>[] {playerClass}, new Object[] {null});
+    } catch (Throwable ignored) {
+      // Fall back to no-arg variants in mocked/test environments.
+    }
+
+    Object byNoArg = invokeNoArg(item, "getDisplayItem");
+    if (byNoArg != null) return byNoArg;
+    return invokeNoArg(item, "displayItem");
   }
 }
