@@ -7,6 +7,7 @@ import cn.superiormc.ultimateshop.objects.items.AbstractSingleThing;
 import cn.superiormc.ultimateshop.objects.items.GiveResult;
 import cn.superiormc.ultimateshop.objects.items.TakeResult;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.Map;
 import net.kyori.adventure.text.Component;
@@ -14,11 +15,13 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import top.ellan.ecobridge.application.service.EconomyManager;
 import top.ellan.ecobridge.application.service.EconomicStateManager;
 import top.ellan.ecobridge.application.service.LimitManager;
 import top.ellan.ecobridge.application.service.PlayerMarketPolicyService;
 import top.ellan.ecobridge.application.service.PricingManager;
 import top.ellan.ecobridge.application.service.TransferManager;
+import top.ellan.ecobridge.infrastructure.persistence.storage.AsyncLogger;
 import top.ellan.ecobridge.infrastructure.ffi.model.NativeTransferResult;
 import top.ellan.ecobridge.integration.platform.compat.UltimateShopCompat;
 
@@ -76,6 +79,8 @@ public class UltimateShopHook implements Listener {
             player.getUniqueId(), PricingManager.toMarketKey(shopId, productId), amount);
       }
     }
+
+    recordFinalSettlement(event, player, shopId, productId, isBuy);
   }
 
   private void processBuy(
@@ -186,5 +191,74 @@ public class UltimateShopHook implements Listener {
       }
     }
     return false;
+  }
+
+  private void recordFinalSettlement(
+      ItemFinishTransactionEvent event, Player player, String shopId, String productId, boolean isBuy) {
+    double settledMoney = resolveFinalEconomyMoney(event, isBuy);
+    if (!Double.isFinite(settledMoney) || settledMoney <= 0.0) return;
+
+    EconomyManager economyManager = EconomyManager.getInstance();
+    if (economyManager != null) {
+      economyManager.recordTradeVolume(settledMoney);
+    }
+
+    String marketKey = PricingManager.toMarketKey(shopId, productId);
+    String signedSide = isBuy ? "BUY" : "SELL";
+    double signedAmount = isBuy ? -settledMoney : settledMoney;
+    AsyncLogger.log(
+        player.getUniqueId(),
+        signedAmount,
+        0.0,
+        System.currentTimeMillis(),
+        "MARKET_SETTLEMENT:" + signedSide + ":" + marketKey);
+  }
+
+  private double resolveFinalEconomyMoney(ItemFinishTransactionEvent event, boolean isBuy) {
+    Object resultObj = isBuy ? invokeNoArg(event, "getTakeResult") : invokeNoArg(event, "getGiveResult");
+    if (resultObj == null) return 0.0;
+
+    Object mapObj = invokeNoArg(resultObj, "getResultMap");
+    if (!(mapObj instanceof Map<?, ?> map) || map.isEmpty()) return 0.0;
+
+    double total = 0.0;
+    for (Map.Entry<?, ?> entry : map.entrySet()) {
+      Object thing = entry.getKey();
+      if (!isEconomyThing(thing)) continue;
+      Object value = entry.getValue();
+      if (value instanceof BigDecimal decimal) {
+        total += Math.abs(decimal.doubleValue());
+      } else if (value instanceof Number number) {
+        total += Math.abs(number.doubleValue());
+      }
+    }
+    return total;
+  }
+
+  private boolean isEconomyThing(Object thing) {
+    if (!(thing instanceof AbstractSingleThing singleThing)) return false;
+    ConfigurationSection section = singleThing.getSingleSection();
+    if (section == null) return false;
+    String ecoType = section.getString("economy-plugin", "");
+    return ecoType.equalsIgnoreCase("Vault")
+        || ecoType.equalsIgnoreCase("PlayerPoints")
+        || ecoType.equalsIgnoreCase("CMI")
+        || ecoType.equalsIgnoreCase("CoinsEngine");
+  }
+
+  private Object invokeNoArg(Object target, String methodName) {
+    if (target == null) return null;
+    try {
+      Method method = target.getClass().getMethod(methodName);
+      return method.invoke(target);
+    } catch (Exception ignored) {
+      try {
+        Method declared = target.getClass().getDeclaredMethod(methodName);
+        declared.setAccessible(true);
+        return declared.invoke(target);
+      } catch (Exception ignoredAgain) {
+        return null;
+      }
+    }
   }
 }
