@@ -84,6 +84,9 @@ public class ConfigMigrator {
         copyValue(oldConfig, newConfig, "economy.player-market.quota.base");
         copyValue(oldConfig, newConfig, "economy.player-market.quota.gamma-per-hour");
         copyValue(oldConfig, newConfig, "economy.player-market.quota.global-cap");
+        copyValue(oldConfig, newConfig, "economy.player-market.quota.share-mode.enabled");
+        copyValue(oldConfig, newConfig, "economy.player-market.quota.share-mode.pool-base");
+        copyValue(oldConfig, newConfig, "economy.player-market.quota.share-mode.pool-per-online-player");
         copyValue(oldConfig, newConfig, "economy.player-market.decay.enabled");
         copyValue(oldConfig, newConfig, "economy.player-market.decay.delta");
         copyValue(oldConfig, newConfig, "economy.player-market.decay.tau-days");

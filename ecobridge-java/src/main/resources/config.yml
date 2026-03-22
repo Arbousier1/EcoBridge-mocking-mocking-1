@@ -74,6 +74,10 @@ economy:
       base: 64.0
       gamma-per-hour: 0.4
       global-cap: 4096.0
+      share-mode:
+        enabled: true
+        pool-base: 0.0
+        pool-per-online-player: 96.0
     decay:
       enabled: true
       delta: 0.8

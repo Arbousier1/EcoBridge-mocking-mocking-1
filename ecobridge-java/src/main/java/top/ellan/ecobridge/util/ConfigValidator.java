@@ -36,6 +36,8 @@ public class ConfigValidator {
         healthy &= checkRange(config, "economy.player-market.quota.base", 1.0, 100000.0, 64.0);
         healthy &= checkRange(config, "economy.player-market.quota.gamma-per-hour", 0.0, 100.0, 0.4);
         healthy &= checkRange(config, "economy.player-market.quota.global-cap", 1.0, 10000000.0, 4096.0);
+        healthy &= checkRange(config, "economy.player-market.quota.share-mode.pool-base", 0.0, 100000000.0, 0.0);
+        healthy &= checkRange(config, "economy.player-market.quota.share-mode.pool-per-online-player", 1.0, 1000000.0, 96.0);
         healthy &= checkRange(config, "economy.player-market.decay.delta", 0.01, 10.0, 0.8);
         healthy &= checkRange(config, "economy.player-market.decay.tau-days", 0.0, 365.0, 3.0);
         healthy &= checkRange(config, "economy.player-market.decay.window-days", 1, 365, 21);

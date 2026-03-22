@@ -1,5 +1,6 @@
 package top.ellan.ecobridge.application.service;
 
+import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.FileConfiguration;
 import top.ellan.ecobridge.EcoBridge;
 import top.ellan.ecobridge.infrastructure.persistence.storage.ActivityCollector;
@@ -39,6 +40,9 @@ public final class PlayerMarketPolicyService {
     private volatile double quotaGammaPerHour;
     private volatile double quotaGlobalCap;
     private volatile long quotaPeriodHours;
+    private volatile boolean quotaShareModeEnabled;
+    private volatile double quotaSharePoolBase;
+    private volatile double quotaSharePoolPerOnlinePlayer;
 
     private volatile double epsilonWeekendFactor;
     private volatile double epsilonHolidayFactor;
@@ -80,6 +84,9 @@ public final class PlayerMarketPolicyService {
         quotaGammaPerHour = c.getDouble("economy.player-market.quota.gamma-per-hour", 0.4);
         quotaGlobalCap = c.getDouble("economy.player-market.quota.global-cap", 4096.0);
         quotaPeriodHours = Math.max(1L, c.getLong("economy.player-market.quota.period-hours", 168L));
+        quotaShareModeEnabled = c.getBoolean("economy.player-market.quota.share-mode.enabled", true);
+        quotaSharePoolBase = c.getDouble("economy.player-market.quota.share-mode.pool-base", 0.0);
+        quotaSharePoolPerOnlinePlayer = c.getDouble("economy.player-market.quota.share-mode.pool-per-online-player", 96.0);
 
         epsilonWeekendFactor = c.getDouble("economy.player-market.indices.weekend-factor", 0.98);
         epsilonHolidayFactor = c.getDouble("economy.player-market.indices.holiday-factor", 0.95);
@@ -143,9 +150,29 @@ public final class PlayerMarketPolicyService {
     }
 
     private double computeQuota(UUID playerUuid) {
+        double legacyQuota = Math.min(quotaGlobalCap, computeWeight(playerUuid));
+        if (!quotaShareModeEnabled) return legacyQuota;
+        if (!Bukkit.isPrimaryThread()) return legacyQuota;
+
+        var onlinePlayers = Bukkit.getOnlinePlayers();
+        if (onlinePlayers == null || onlinePlayers.isEmpty()) return legacyQuota;
+
+        double sumWeights = 0.0;
+        for (var player : onlinePlayers) {
+            sumWeights += computeWeight(player.getUniqueId());
+        }
+        if (sumWeights <= 0.0) return legacyQuota;
+
+        double selfWeight = computeWeight(playerUuid);
+        double globalPool = Math.max(1.0, quotaSharePoolBase + quotaSharePoolPerOnlinePlayer * onlinePlayers.size());
+        double sharedQuota = globalPool * (selfWeight / sumWeights);
+        return Math.min(quotaGlobalCap, Math.max(1.0, sharedQuota));
+    }
+
+    private double computeWeight(UUID playerUuid) {
         var snapshot = ActivityCollector.getSafeSnapshot(playerUuid);
         double hours = snapshot.playTimeSeconds() / 3600.0;
-        return Math.min(quotaGlobalCap, quotaBase + (quotaGammaPerHour * hours));
+        return Math.max(1.0, quotaBase + (quotaGammaPerHour * hours));
     }
 
     private void pruneQuota(UUID playerUuid) {
@@ -223,4 +250,3 @@ public final class PlayerMarketPolicyService {
     private record QuotaUsage(long timestampMs, int amount) {}
     private record PlayerItemKey(UUID playerUuid, String marketKey) {}
 }
-
