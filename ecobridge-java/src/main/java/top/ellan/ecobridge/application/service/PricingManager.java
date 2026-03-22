@@ -264,7 +264,7 @@ public class PricingManager {
             
             // 3. 注入 Native 状态 (如需反作弊或 Rust 侧统计)
             if (NativeBridge.isLoaded()) {
-                NativeBridge.injectRemoteTrade(amount);
+                NativeBridge.injectRemoteTrade(NativeBridge.moneyToMicros(amount));
             }
         } finally {
             lock.unlock();

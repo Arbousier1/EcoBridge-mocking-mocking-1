@@ -19,7 +19,6 @@ public class NativeContextBuilder {
 
     // 缓存时区偏移量，减少高频交易时的系统调用开销
     private static final int TIMEZONE_OFFSET = OffsetDateTime.now().getOffset().getTotalSeconds();
-    private static final double MICROS_SCALE = 1_000_000.0;
 
     /**
      * 填充标准的交易上下文 (Global Context) - 默认交易量为 1.0
@@ -72,7 +71,7 @@ public class NativeContextBuilder {
             
             // [Fix] 适配 Micros 精度：将 double 数量转换为 long 微米值
             // Rust 端 current_amount 类型为 i64，此处需进行定点数转换
-            long amountMicros = (long) (amountHint * MICROS_SCALE);
+            long amountMicros = NativeBridge.moneyToMicros(amountHint);
             NativeBridge.VH_CTX_CURR_AMT.set(ctxSeg, 0L, amountMicros);
 
         } catch (Exception e) {
@@ -91,7 +90,7 @@ public class NativeContextBuilder {
         try {
             // [Fix] 适配 Micros 精度：base_price -> base_price_micros
             // 将 Java 的 double 价格转换为 Rust 的 i64 微米价格
-            long priceMicros = (long) (basePrice * MICROS_SCALE);
+            long priceMicros = NativeBridge.moneyToMicros(basePrice);
             NativeBridge.VH_CTX_BASE_PRICE_MICROS.set(ctxSeg, 0L, priceMicros);
         } catch (Exception e) {
             LogUtil.error("更新 ItemContext 失败", e);

@@ -123,6 +123,12 @@ public class NativeBridge {
     private static volatile MethodHandle computeBatchPricesMH;
     private static volatile MethodHandle injectRemoteTradeMH;
     private static volatile MethodHandle getDynamicLimitMH;
+    private static volatile MethodHandle moneyToMicrosMH;
+    private static volatile MethodHandle microsToMoneyMH;
+    private static volatile MethodHandle computeVolatilityFromStabilityMH;
+    private static volatile MethodHandle computeVelocityDecayMH;
+    private static volatile MethodHandle computeFallbackTaxMH;
+    private static volatile MethodHandle computeSettlementMH;
 
     static {
         try {
@@ -231,7 +237,7 @@ public class NativeBridge {
         getVersionMH = bind(linker, "ecobridge_version", FunctionDescriptor.of(ADDRESS));
         shutdownDBMH = bind(linker, "ecobridge_shutdown_db", FunctionDescriptor.of(JAVA_INT));
         getHealthStatsMH = bind(linker, "ecobridge_get_health_stats", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
-        pushToDuckDBMH = bind(linker, "ecobridge_log_to_duckdb", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_DOUBLE, JAVA_DOUBLE, ADDRESS));
+        pushToDuckDBMH = bind(linker, "ecobridge_log_to_duckdb", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS));
         queryNeffVectorizedMH = bind(linker, "ecobridge_query_neff_vectorized", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_DOUBLE, ADDRESS));
         
         computePriceMH = bind(linker, "ecobridge_compute_price_humane", FunctionDescriptor.of(JAVA_INT, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, ADDRESS), Linker.Option.critical(true));
@@ -246,8 +252,14 @@ public class NativeBridge {
         computePidMH = bind(linker, "ecobridge_compute_pid_adjustment", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, ADDRESS));
         resetPidMH = bind(linker, "ecobridge_reset_pid_state", FunctionDescriptor.of(JAVA_INT, ADDRESS));
         computeBatchPricesMH = bind(linker, "ecobridge_compute_batch_prices", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_DOUBLE, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
-        injectRemoteTradeMH = bind(linker, "inject_remote_trade", FunctionDescriptor.of(JAVA_INT, JAVA_DOUBLE));
+        injectRemoteTradeMH = bind(linker, "inject_remote_trade", FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
         getDynamicLimitMH = bind(linker, "ecobridge_get_dynamic_limit", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, ADDRESS));
+        moneyToMicrosMH = bind(linker, "ecobridge_money_to_micros", FunctionDescriptor.of(JAVA_INT, JAVA_DOUBLE, ADDRESS));
+        microsToMoneyMH = bind(linker, "ecobridge_micros_to_money", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
+        computeVolatilityFromStabilityMH = bind(linker, "ecobridge_compute_volatility_from_stability", FunctionDescriptor.of(JAVA_INT, JAVA_DOUBLE, ADDRESS));
+        computeVelocityDecayMH = bind(linker, "ecobridge_compute_velocity_decay", FunctionDescriptor.of(JAVA_INT, JAVA_DOUBLE, JAVA_LONG, JAVA_DOUBLE, ADDRESS));
+        computeFallbackTaxMH = bind(linker, "ecobridge_compute_fallback_tax", FunctionDescriptor.of(JAVA_INT, JAVA_DOUBLE, ADDRESS));
+        computeSettlementMH = bind(linker, "ecobridge_compute_settlement", FunctionDescriptor.of(JAVA_INT, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_INT, ADDRESS, ADDRESS));
     }
 
     private static MethodHandle bind(Linker linker, String name, FunctionDescriptor desc, Linker.Option... options) {
@@ -296,6 +308,8 @@ public class NativeBridge {
         calcInflationMH = null; calcStabilityMH = null; calcDecayMH = null;
         computeTierPriceMH = null; computePriceBoundedMH = null; computeBatchPricesMH = null;
         injectRemoteTradeMH = null; getDynamicLimitMH = null;
+        moneyToMicrosMH = null; microsToMoneyMH = null; computeVolatilityFromStabilityMH = null;
+        computeVelocityDecayMH = null; computeFallbackTaxMH = null; computeSettlementMH = null;
     }
 
     // --- 安全执行器 ---
@@ -393,9 +407,76 @@ public class NativeBridge {
         }, base, false);
     }
 
-    public static void injectRemoteTrade(double amount) {
+    public static long moneyToMicros(double amount) {
+        return executeSafely(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment out = arena.allocate(JAVA_LONG);
+                int status = (int) moneyToMicrosMH.invokeExact(amount, out);
+                return status == 0 ? out.get(JAVA_LONG, 0L) : 0L;
+            }
+        }, 0L, false);
+    }
+
+    public static double microsToMoney(long micros) {
+        return executeSafely(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment out = arena.allocate(JAVA_DOUBLE);
+                int status = (int) microsToMoneyMH.invokeExact(micros, out);
+                return status == 0 ? out.get(JAVA_DOUBLE, 0L) : 0.0;
+            }
+        }, 0.0, false);
+    }
+
+    public static double computeVolatilityFromStability(double stability) {
+        return executeSafely(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment out = arena.allocate(JAVA_DOUBLE);
+                int status = (int) computeVolatilityFromStabilityMH.invokeExact(stability, out);
+                return status == 0 ? out.get(JAVA_DOUBLE, 0L) : 1.0;
+            }
+        }, 1.0, false);
+    }
+
+    public static double computeVelocityDecay(double velocity, long deltaMs, double halfLifeMs) {
+        return executeSafely(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment out = arena.allocate(JAVA_DOUBLE);
+                int status = (int) computeVelocityDecayMH.invokeExact(velocity, deltaMs, halfLifeMs, out);
+                return status == 0 ? out.get(JAVA_DOUBLE, 0L) : velocity;
+            }
+        }, velocity, false);
+    }
+
+    public static double computeFallbackTax(double amount) {
+        return executeSafely(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment out = arena.allocate(JAVA_DOUBLE);
+                int status = (int) computeFallbackTaxMH.invokeExact(amount, out);
+                return status == 0 ? out.get(JAVA_DOUBLE, 0L) : amount * 0.05;
+            }
+        }, amount * 0.05, false);
+    }
+
+    public record SettlementMath(double tax, double netAmount) {}
+
+    public static SettlementMath computeSettlement(double amount, double suggestedTax, boolean bypassTax) {
+        return executeSafely(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment outTax = arena.allocate(JAVA_DOUBLE);
+                MemorySegment outNet = arena.allocate(JAVA_DOUBLE);
+                int status = (int) computeSettlementMH.invokeExact(amount, suggestedTax, bypassTax ? 1 : 0, outTax, outNet);
+                if (status != 0) {
+                    double taxFallback = bypassTax ? 0.0 : Math.max(0.0, Math.min(suggestedTax, amount));
+                    return new SettlementMath(taxFallback, amount - taxFallback);
+                }
+                return new SettlementMath(outTax.get(JAVA_DOUBLE, 0L), outNet.get(JAVA_DOUBLE, 0L));
+            }
+        }, new SettlementMath(0.0, amount), false);
+    }
+
+    public static void injectRemoteTrade(long amountMicros) {
         executeSafely(() -> {
-            injectRemoteTradeMH.invokeExact(amount);
+            injectRemoteTradeMH.invokeExact(amountMicros);
             return null;
         }, null, false);
     }
@@ -403,7 +484,9 @@ public class NativeBridge {
     public static void pushToDuckDB(long ts, String uuid, double amount, double bal, String meta) {
         executeSafely(() -> {
             try (Arena arena = Arena.ofConfined()) {
-                pushToDuckDBMH.invokeExact(ts, arena.allocateFrom(uuid), amount, bal, arena.allocateFrom(meta));
+                long amountMicros = moneyToMicros(amount);
+                long balMicros = moneyToMicros(bal);
+                pushToDuckDBMH.invokeExact(ts, arena.allocateFrom(uuid), amountMicros, balMicros, arena.allocateFrom(meta));
             }
             return null;
         }, null, false);

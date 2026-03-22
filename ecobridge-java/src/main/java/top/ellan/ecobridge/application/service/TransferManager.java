@@ -59,9 +59,6 @@ public class TransferManager {
     private final ReentrantLock updateLock = new ReentrantLock();
     private double velocityHalfLife = 60.0;
     
-    // 精度常量
-    private static final double MICROS_SCALE = 1_000_000.0;
-
     // --- FFI 内存布局句柄 (Micros Adapted) ---
     private static final VarHandle VH_TR_AMOUNT;
     private static final VarHandle VH_TR_S_BAL;
@@ -159,7 +156,7 @@ public class TransferManager {
                 if (shouldTriggerFallback(result)) {
                     if (plugin.getConfig().getBoolean("economy.fallback-mode", true)) {
                         LogUtil.warn("Native 内核无响应或发生 Panic (Code 101)，切换至安全降级模式执行交易。");
-                        NativeTransferResult fallbackResult = new NativeTransferResult(amount * 0.05, false, 0);
+                        NativeTransferResult fallbackResult = new NativeTransferResult(NativeBridge.computeFallbackTax(amount), false, 0);
                         executeSettlement(sender, receiver, currency, amount, fallbackResult);
                     } else {
                         sender.sendMessage(EcoBridge.getMiniMessage().deserialize("<red>⚠ 经济核心维护中，交易暂时关闭。"));
@@ -196,7 +193,7 @@ public class TransferManager {
             if (status != 0) return NativeTransferResult.FFI_ERROR;
 
             long taxMicros = (long) NativeBridge.VH_RES_TAX_MICROS.get(resSeg, 0L);
-            double tax = taxMicros / MICROS_SCALE;
+            double tax = NativeBridge.microsToMoney(taxMicros);
             
             boolean isBlocked = ((Number) NativeBridge.VH_RES_BLOCKED.get(resSeg, 0L)).intValue() != 0;
             int warningCode = ((Number) NativeBridge.VH_RES_CODE.get(resSeg, 0L)).intValue();
@@ -212,9 +209,9 @@ public class TransferManager {
         var sSnapshot = ActivityCollector.getSafeSnapshot(sender.getUniqueId());
         double individualVelocity = getEstimatedVelocity(sender.getUniqueId());
 
-        final long amountMicros = (long) (amount * MICROS_SCALE);
-        final long senderBalMicros = (long) (senderBal * MICROS_SCALE);
-        final long receiverBalMicros = (receiver != null) ? (long) (CoinsEngineAPI.getBalance(receiver, cur) * MICROS_SCALE) : 0L;
+        final long amountMicros = NativeBridge.moneyToMicros(amount);
+        final long senderBalMicros = NativeBridge.moneyToMicros(senderBal);
+        final long receiverBalMicros = (receiver != null) ? NativeBridge.moneyToMicros(CoinsEngineAPI.getBalance(receiver, cur)) : 0L;
 
         VH_TR_AMOUNT.set(ctx, 0L, amountMicros);
         VH_TR_S_BAL.set(ctx, 0L, senderBalMicros);
@@ -257,8 +254,9 @@ public class TransferManager {
         }
 
         boolean canBypassTax = sender.isOp() || sender.hasPermission(BYPASS_TAX_PERMISSION);
-        double tax = canBypassTax ? 0.0 : audit.finalTax();
-        double netAmount = amount - tax;
+        NativeBridge.SettlementMath settlementMath = NativeBridge.computeSettlement(amount, audit.finalTax(), canBypassTax);
+        double tax = settlementMath.tax();
+        double netAmount = settlementMath.netAmount();
 
         String txId;
         try {
@@ -363,8 +361,7 @@ public class TransferManager {
         public synchronized double getRecalculated(long now) {
             long delta = now - lastUpdateTs;
             if (delta <= 0) return velocity;
-            double decayFactor = Math.pow(0.5, (double) delta / halfLifeMs);
-            return velocity * decayFactor;
+            return NativeBridge.computeVelocityDecay(velocity, delta, halfLifeMs);
         }
 
         public synchronized void add(double amount, long now) {
@@ -387,25 +384,25 @@ public class TransferManager {
         cfg.set(JAVA_DOUBLE, 0, baseTax);
         
         // luxury_threshold (i64)
-        cfg.set(JAVA_LONG, 8, (long)(luxuryThreshold * MICROS_SCALE));
+        cfg.set(JAVA_LONG, 8, NativeBridge.moneyToMicros(luxuryThreshold));
         
         cfg.set(JAVA_DOUBLE, 16, section != null ? section.getDouble("luxury-tax-rate", 0.1) : 0.1);
         cfg.set(JAVA_DOUBLE, 24, section != null ? section.getDouble("wealth-gap-tax-rate", 0.2) : 0.2);
         
         // poor_threshold (i64)
         double poorTh = section != null ? section.getDouble("poor-threshold", 10000.0) : 10000.0;
-        cfg.set(JAVA_LONG, 32, (long)(poorTh * MICROS_SCALE));
+        cfg.set(JAVA_LONG, 32, NativeBridge.moneyToMicros(poorTh));
         
         // rich_threshold (i64)
         double richTh = section != null ? section.getDouble("rich-threshold", 1000000.0) : 1000000.0;
-        cfg.set(JAVA_LONG, 40, (long)(richTh * MICROS_SCALE));
+        cfg.set(JAVA_LONG, 40, NativeBridge.moneyToMicros(richTh));
         
         cfg.set(JAVA_DOUBLE, 48, 0.0); 
         cfg.set(JAVA_DOUBLE, 56, section != null ? section.getDouble("warning-ratio", 0.9) : 0.9);
         
         // warning_min_amount (i64)
         double warnMin = section != null ? section.getDouble("warning-min-amount", 50000.0) : 50000.0;
-        cfg.set(JAVA_LONG, 64, (long)(warnMin * MICROS_SCALE));
+        cfg.set(JAVA_LONG, 64, NativeBridge.moneyToMicros(warnMin));
         
         cfg.set(JAVA_DOUBLE, 72, section != null ? section.getDouble("newbie-hours", 10.0) : 10.0);
         cfg.set(JAVA_DOUBLE, 80, section != null ? section.getDouble("veteran-hours", 100.0) : 100.0);

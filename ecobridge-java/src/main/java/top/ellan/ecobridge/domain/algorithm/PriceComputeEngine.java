@@ -36,9 +36,6 @@ public class PriceComputeEngine {
     // 安全阈值：单次 Critical FFI 调用处理的最大商品数
     private static final int GC_SAFE_THRESHOLD = 500;
     
-    // [Fix] 精度转换常量
-    private static final double MICROS_SCALE = 1_000_000.0;
-
     /**
      * 更新全量缓存物品，供监听器使用
      */
@@ -102,7 +99,7 @@ public class PriceComputeEngine {
         Map<String, Double> histAvgMap = loadHistoryAverages(activeItems);
 
         double stability = EconomyManager.getInstance().getMarketStability();
-        double activeVolatility = 1.0 + (1.0 - stability) * 2.0;
+        double activeVolatility = NativeBridge.computeVolatilityFromStability(stability);
 
         // 5. FFM 资源安全封装
         try (Arena arena = Arena.ofConfined()) {
@@ -130,9 +127,8 @@ public class PriceComputeEngine {
                 // 填充基础数据 (NativeContextBuilder 已适配 Micros)
                 NativeContextBuilder.fillGlobalContext(ctxSlice, now, 1.0);
                 
-                // [Fix] 这里的 basePrice 写入必须手动适配 micros 精度
-                // 将 double 转换为 i64 (微米)
-                long basePriceMicros = (long) (meta.basePrice() * MICROS_SCALE);
+                // Conversion math is delegated to Rust to keep numeric rules centralized.
+                long basePriceMicros = NativeBridge.moneyToMicros(meta.basePrice());
                 NativeBridge.VH_CTX_BASE_PRICE_MICROS.set(ctxArray, ctxOffset, basePriceMicros);
 
                 ConfigurationSection itemConfig = null;
@@ -201,7 +197,7 @@ public class PriceComputeEngine {
             String shopId = autoItem.shopId();
             String prodId = autoItem.productId();
             
-            double finalLambda = autoItem.lambda(); 
+            double finalLambda = defaultLambda;
             double finalBasePrice = autoItem.basePrice();
 
             if (configSection != null) {

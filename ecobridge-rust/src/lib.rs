@@ -47,6 +47,21 @@ pub enum EconStatus {
 static REMOTE_FLOW_ACCUMULATOR_MICROS: AtomicI64 = AtomicI64::new(0);
 const MICROS_SCALE: f64 = 1_000_000.0;
 
+#[inline]
+fn to_micros_saturating(value: f64) -> i64 {
+    if !value.is_finite() {
+        return 0;
+    }
+    let scaled = value * MICROS_SCALE;
+    if scaled >= i64::MAX as f64 {
+        i64::MAX
+    } else if scaled <= i64::MIN as f64 {
+        i64::MIN
+    } else {
+        scaled.round() as i64
+    }
+}
+
 // -----------------------------------------------------------------------------
 // FFI 安全屏障 (The Firewall)
 // -----------------------------------------------------------------------------
@@ -168,6 +183,117 @@ pub extern "C" fn inject_remote_trade(amount_micros: c_longlong) -> c_int {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn ecobridge_money_to_micros(
+    value: c_double,
+    out_result: *mut c_longlong,
+) -> c_int {
+    ffi_guard!(|| {
+        if out_result.is_null() {
+            return EconStatus::NullPointer;
+        }
+        *out_result = to_micros_saturating(value);
+        EconStatus::Ok
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ecobridge_micros_to_money(
+    value_micros: c_longlong,
+    out_result: *mut c_double,
+) -> c_int {
+    ffi_guard!(|| {
+        if out_result.is_null() {
+            return EconStatus::NullPointer;
+        }
+        *out_result = (value_micros as f64) / MICROS_SCALE;
+        EconStatus::Ok
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ecobridge_compute_volatility_from_stability(
+    stability: c_double,
+    out_result: *mut c_double,
+) -> c_int {
+    ffi_guard!(|| {
+        if out_result.is_null() {
+            return EconStatus::NullPointer;
+        }
+        if !stability.is_finite() {
+            return EconStatus::InvalidValue;
+        }
+        *out_result = 1.0 + (1.0 - stability) * 2.0;
+        EconStatus::Ok
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ecobridge_compute_velocity_decay(
+    velocity: c_double,
+    delta_ms: c_longlong,
+    half_life_ms: c_double,
+    out_result: *mut c_double,
+) -> c_int {
+    ffi_guard!(|| {
+        if out_result.is_null() {
+            return EconStatus::NullPointer;
+        }
+        if !velocity.is_finite() || !half_life_ms.is_finite() || half_life_ms <= 0.0 {
+            return EconStatus::InvalidValue;
+        }
+        if delta_ms <= 0 {
+            *out_result = velocity;
+            return EconStatus::Ok;
+        }
+        let decay_factor = 0.5_f64.powf((delta_ms as f64) / half_life_ms);
+        *out_result = velocity * decay_factor;
+        EconStatus::Ok
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ecobridge_compute_fallback_tax(
+    amount: c_double,
+    out_result: *mut c_double,
+) -> c_int {
+    ffi_guard!(|| {
+        if out_result.is_null() {
+            return EconStatus::NullPointer;
+        }
+        if !amount.is_finite() || amount < 0.0 {
+            return EconStatus::InvalidValue;
+        }
+        *out_result = amount * 0.05;
+        EconStatus::Ok
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ecobridge_compute_settlement(
+    amount: c_double,
+    suggested_tax: c_double,
+    bypass_tax: c_int,
+    out_tax: *mut c_double,
+    out_net: *mut c_double,
+) -> c_int {
+    ffi_guard!(|| {
+        if out_tax.is_null() || out_net.is_null() {
+            return EconStatus::NullPointer;
+        }
+        if !amount.is_finite() || !suggested_tax.is_finite() || amount < 0.0 {
+            return EconStatus::InvalidValue;
+        }
+        let mut final_tax = if bypass_tax != 0 { 0.0 } else { suggested_tax.max(0.0) };
+        if final_tax > amount {
+            final_tax = amount;
+        }
+        *out_tax = final_tax;
+        *out_net = amount - final_tax;
+        EconStatus::Ok
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn ecobridge_query_neff_vectorized(
     current_ts: c_longlong,
     tau: c_double,
@@ -232,7 +358,7 @@ pub unsafe extern "C" fn ecobridge_compute_price_final(
     ffi_guard!(|| {
         if out_result.is_null() { return EconStatus::NullPointer; }
         // [Precision Fix]: 将 c_double base 转换为 i64 Micros
-        let base_micros = (base * MICROS_SCALE) as i64;
+        let base_micros = to_micros_saturating(base);
         *out_result = economy::pricing::compute_price_final_internal(base_micros, n_eff, lambda, epsilon);
         EconStatus::Ok
     })
@@ -264,8 +390,8 @@ pub unsafe extern "C" fn ecobridge_compute_price_humane(
     ffi_guard!(|| {
         if out_result.is_null() { return EconStatus::NullPointer; }
         // [Precision Fix]: 将 base 和 trade_amount 转换为 i64 Micros
-        let base_micros = (base * MICROS_SCALE) as i64;
-        let amount_micros = (trade_amount * MICROS_SCALE) as i64;
+        let base_micros = to_micros_saturating(base);
+        let amount_micros = to_micros_saturating(trade_amount);
         *out_result = economy::pricing::compute_price_humane_internal(base_micros, n_eff, amount_micros, lambda, epsilon);
         EconStatus::Ok
     })
@@ -284,8 +410,8 @@ pub unsafe extern "C" fn ecobridge_compute_price_bounded(
     ffi_guard!(|| {
         if out_result.is_null() { return EconStatus::NullPointer; }
         // [Precision Fix]: 将 base 和 amt 转换为 i64 Micros
-        let base_micros = (base * MICROS_SCALE) as i64;
-        let amt_micros = (amt * MICROS_SCALE) as i64;
+        let base_micros = to_micros_saturating(base);
+        let amt_micros = to_micros_saturating(amt);
         *out_result = economy::pricing::compute_price_bounded_internal(base_micros, n_eff, amt_micros, lambda, eps, hist_avg);
         EconStatus::Ok
     })

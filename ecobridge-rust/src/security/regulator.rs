@@ -16,6 +16,21 @@ pub const CODE_BLOCK_QUANTITY_LIMIT: i32 = 6;
 /// 精度缩放常量 (1.0 = 1,000,000 Micros)
 const MICROS_SCALE: f64 = 1_000_000.0;
 
+#[inline]
+fn to_micros_saturating(value: f64) -> i64 {
+    if !value.is_finite() {
+        return 0;
+    }
+    let scaled = value * MICROS_SCALE;
+    if scaled >= i64::MAX as f64 {
+        i64::MAX
+    } else if scaled <= i64::MIN as f64 {
+        i64::MIN
+    } else {
+        scaled.round() as i64
+    }
+}
+
 /// 增强型交易审计逻辑 (v1.6.0 - Precision Hardened)
 /// 
 /// 该版本已全面适配 i64 Micros 定点数协议，彻底解决 IEEE 754 累积误差。
@@ -42,7 +57,7 @@ pub fn compute_transfer_check_internal(
     let final_limit = calculated_limit.min(max_limit);
 
     // 拦截判定：比较原始 i64 Micros 以确保绝对精确
-    let final_limit_micros = (final_limit * MICROS_SCALE) as i64;
+    let final_limit_micros = to_micros_saturating(final_limit);
     if ctx.amount_micros > final_limit_micros && final_limit_micros > 0 {
         return TransferResult {
             final_tax_micros: 0,
@@ -109,7 +124,7 @@ pub fn compute_transfer_check_internal(
 
     TransferResult {
         // 结果转换回 i64 Micros 传回 Java
-        final_tax_micros: (tax_clamped * MICROS_SCALE) as i64,
+        final_tax_micros: to_micros_saturating(tax_clamped),
         is_blocked: 0,
         warning_code,
     }
