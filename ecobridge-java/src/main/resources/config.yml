@@ -27,30 +27,39 @@ economy:
   m1-supply: 10000000.0
   volatility-threshold: 50000.0
   daily-decay-rate: 0.05
-  tau: 7.0
-  sell-ratio: 0.5
-  default-lambda: 0.002
+  tau: 10.0
+  sell-ratio: 0.58
+  default-lambda: 0.0016
+  min-price-ratio-to-base: 0.45
+  max-price-ratio-to-base: 2.60
   history-days-limit: 7
   holiday-multiplier: 1.2
 
   macro:
     target-velocity: 0.04
-    capacity-per-user: 5000.0
+    capacity-per-user: 4500.0
 
   control:
     predictive:
-      horizon-seconds: 259200.0
+      horizon-seconds: 172800.0
     lambda:
-      min-multiplier: 0.60
-      max-multiplier: 2.20
+      min-multiplier: 0.75
+      max-multiplier: 1.35
 
   recovery:
     enabled: true
-    floor-ratio-to-history: 0.55
-    activation-ratio-to-history: 0.78
-    target-ratio-to-history: 0.92
-    strength: 0.28
-    max-step-per-cycle: 0.03
+    floor-ratio-to-history: 0.62
+    activation-ratio-to-history: 0.82
+    target-ratio-to-history: 0.95
+    strength: 0.34
+    max-step-per-cycle: 0.025
+
+  neff:
+    enabled: true
+    half-life-seconds: 5400
+    buy-weight: 1.15
+    sell-weight: 0.90
+    per-shop-per-item: true
 
   player-market:
     enabled: true
