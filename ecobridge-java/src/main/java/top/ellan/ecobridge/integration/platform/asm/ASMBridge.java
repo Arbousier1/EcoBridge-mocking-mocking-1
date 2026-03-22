@@ -3,19 +3,17 @@ package top.ellan.ecobridge.integration.platform.asm;
 import cn.superiormc.ultimateshop.objects.buttons.ObjectItem;
 import cn.superiormc.ultimateshop.objects.items.prices.ObjectPrices;
 import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.inventory.ItemStack;
 import top.ellan.ecobridge.EcoBridge;
 import top.ellan.ecobridge.application.service.PricingManager;
+import top.ellan.ecobridge.integration.platform.compat.UltimateShopCompat;
 import top.ellan.ecobridge.util.LogUtil;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * ASMBridge
@@ -32,8 +30,8 @@ public class ASMBridge {
             if (item == null || originalPrices == null) return originalPrices;
             if (EcoBridge.getInstance().isShadowMode()) return originalPrices;
 
-            String shopId = normalize(safeInvokeString(item, "getShop"));
-            String productId = normalize(resolveProductId(item));
+            String shopId = UltimateShopCompat.resolveShopId(item);
+            String productId = UltimateShopCompat.resolveProductId(item);
             if (UNKNOWN.equals(productId)) return originalPrices;
 
             PricingManager pm = PricingManager.getInstance();
@@ -120,7 +118,7 @@ public class ASMBridge {
             try {
                 f.setAccessible(true);
                 Class<?> type = f.getType();
-                String name = f.getName().toLowerCase(Locale.ROOT);
+                String name = f.getName().toLowerCase(java.util.Locale.ROOT);
 
                 if (type == double.class) {
                     f.setDouble(target, value);
@@ -189,46 +187,6 @@ public class ASMBridge {
             cursor = cursor.getSuperclass();
         }
         return result;
-    }
-
-    private static String resolveProductId(ObjectItem item) {
-        String productId = normalize(safeInvokeString(item, "getProduct"));
-        if (!UNKNOWN.equals(productId)) return productId;
-
-        try {
-            Method getConfig = item.getClass().getMethod("getItemConfig");
-            Object config = getConfig.invoke(item);
-            if (config instanceof ConfigurationSection section) {
-                return normalize(section.getName());
-            }
-        } catch (Exception ignored) {
-        }
-
-        try {
-            Method getDisplay = item.getClass().getMethod("getDisplayItem", org.bukkit.entity.Player.class);
-            ItemStack stack = (ItemStack) getDisplay.invoke(item, (Object) null);
-            if (stack != null && stack.getType() != null) return normalize(stack.getType().name());
-        } catch (Exception ignored) {
-        }
-
-        return UNKNOWN;
-    }
-
-    private static String safeInvokeString(Object target, String methodName) {
-        try {
-            Method method = target.getClass().getMethod(methodName);
-            Object result = method.invoke(target);
-            return result == null ? null : result.toString();
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-    private static String normalize(String value) {
-        if (value == null) return UNKNOWN;
-        String trimmed = value.trim();
-        if (trimmed.isEmpty()) return UNKNOWN;
-        return trimmed.toLowerCase(Locale.ROOT);
     }
 
     public static int adjustLimit(ObjectItem item, int originalLimit, boolean isBuy) {

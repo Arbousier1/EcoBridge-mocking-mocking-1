@@ -389,3 +389,7 @@ tasks.withType<ProcessResources> {
         expand(props)
     }
 }
+
+tasks.test {
+    useJUnitPlatform()
+}
