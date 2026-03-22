@@ -301,7 +301,7 @@ spotless {
             "src/main/java/top/ellan/ecobridge/application/bootstrap/**/*.java",
             "src/test/java/top/ellan/ecobridge/test/**/*.java"
         )
-        googleJavaFormat("1.22.0")
+        googleJavaFormat("1.28.0")
         removeUnusedImports()
         trimTrailingWhitespace()
         endWithNewline()
