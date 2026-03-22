@@ -32,6 +32,11 @@ public class ConfigValidator {
         healthy &= checkRange(config, "economy.control.predictive.horizon-seconds", 60.0, 1209600.0, 259200.0);
         healthy &= checkRange(config, "economy.control.lambda.min-multiplier", 0.1, 3.0, 0.6);
         healthy &= checkRange(config, "economy.control.lambda.max-multiplier", 0.2, 5.0, 2.2);
+        healthy &= checkRange(config, "economy.recovery.floor-ratio-to-history", 0.05, 1.0, 0.55);
+        healthy &= checkRange(config, "economy.recovery.activation-ratio-to-history", 0.1, 2.0, 0.78);
+        healthy &= checkRange(config, "economy.recovery.target-ratio-to-history", 0.1, 2.0, 0.92);
+        healthy &= checkRange(config, "economy.recovery.strength", 0.0, 1.0, 0.28);
+        healthy &= checkRange(config, "economy.recovery.max-step-per-cycle", 0.0, 0.2, 0.03);
         healthy &= checkRange(config, "economy.player-market.quota.period-hours", 1, 720, 168);
         healthy &= checkRange(config, "economy.player-market.quota.base", 1.0, 100000.0, 64.0);
         healthy &= checkRange(config, "economy.player-market.quota.gamma-per-hour", 0.0, 100.0, 0.4);

@@ -66,6 +66,14 @@ economy:
       min-multiplier: 0.60
       max-multiplier: 2.20
 
+  recovery:
+    enabled: true
+    floor-ratio-to-history: 0.55
+    activation-ratio-to-history: 0.78
+    target-ratio-to-history: 0.92
+    strength: 0.28
+    max-step-per-cycle: 0.03
+
   player-market:
     enabled: true
     quota:

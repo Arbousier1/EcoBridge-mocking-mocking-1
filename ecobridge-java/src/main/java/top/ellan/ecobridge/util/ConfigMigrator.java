@@ -78,6 +78,12 @@ public class ConfigMigrator {
         copyValue(oldConfig, newConfig, "economy.control.predictive.horizon-seconds");
         copyValue(oldConfig, newConfig, "economy.control.lambda.min-multiplier");
         copyValue(oldConfig, newConfig, "economy.control.lambda.max-multiplier");
+        copyValue(oldConfig, newConfig, "economy.recovery.enabled");
+        copyValue(oldConfig, newConfig, "economy.recovery.floor-ratio-to-history");
+        copyValue(oldConfig, newConfig, "economy.recovery.activation-ratio-to-history");
+        copyValue(oldConfig, newConfig, "economy.recovery.target-ratio-to-history");
+        copyValue(oldConfig, newConfig, "economy.recovery.strength");
+        copyValue(oldConfig, newConfig, "economy.recovery.max-step-per-cycle");
         copyValue(oldConfig, newConfig, "economy.player-market.enabled");
         copyValue(oldConfig, newConfig, "economy.player-market.quota.enabled");
         copyValue(oldConfig, newConfig, "economy.player-market.quota.period-hours");

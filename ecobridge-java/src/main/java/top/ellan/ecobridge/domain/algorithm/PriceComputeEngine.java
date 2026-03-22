@@ -125,6 +125,7 @@ public class PriceComputeEngine {
                     epsilon,
                     histAvg
                 );
+                computedPrice = applyRecoveryGuard(config, computedPrice, histAvg, neff);
 
                 resultMap.put(
                     meta.uniqueKey(),
@@ -183,6 +184,67 @@ public class PriceComputeEngine {
     private static Map<String, Double> loadHistoryAverages(List<ItemMeta> items) {
         List<String> ids = items.stream().map(ItemMeta::uniqueKey).distinct().toList();
         return TransactionDao.get7DayAveragesBatch(ids);
+    }
+
+    private static double applyRecoveryGuard(
+            FileConfiguration config,
+            double computedPrice,
+            double histAvg,
+            double neff
+    ) {
+        if (!Double.isFinite(computedPrice) || computedPrice <= 0.0) return computedPrice;
+        if (!config.getBoolean("economy.recovery.enabled", true)) return computedPrice;
+
+        double anchor = Math.max(0.01, histAvg);
+        double floorRatio = clamp(
+                config.getDouble("economy.recovery.floor-ratio-to-history", 0.55),
+                0.05,
+                1.0
+        );
+        double activationRatio = clamp(
+                config.getDouble("economy.recovery.activation-ratio-to-history", 0.78),
+                floorRatio,
+                1.5
+        );
+        double targetRatio = clamp(
+                config.getDouble("economy.recovery.target-ratio-to-history", 0.92),
+                activationRatio,
+                2.0
+        );
+        double strength = clamp(
+                config.getDouble("economy.recovery.strength", 0.28),
+                0.0,
+                1.0
+        );
+        double maxStep = clamp(
+                config.getDouble("economy.recovery.max-step-per-cycle", 0.03),
+                0.0,
+                0.2
+        );
+
+        double price = computedPrice;
+        double floor = anchor * floorRatio;
+        if (price < floor) {
+            price = floor;
+        }
+
+        double ratio = price / anchor;
+        if (ratio < activationRatio) {
+            double gap = activationRatio - ratio;
+            // Sell-heavy (positive neff) still allows recovery, but with mild damping.
+            double sellPressureDamping = 1.0 / (1.0 + Math.max(0.0, neff) * 0.03);
+            double step = Math.min(maxStep, (strength * gap * sellPressureDamping) + 0.003);
+            double target = anchor * targetRatio;
+            if (target > price) {
+                price += (target - price) * step;
+            }
+        }
+
+        return Math.max(price, floor);
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private static void fillMarketConfigAtOffset(MemorySegment cfgBase, long offset, ConfigurationSection itemSec, FileConfiguration globalConfig, double currentLambda, double volatility) {
