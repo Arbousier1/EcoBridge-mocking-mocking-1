@@ -325,9 +325,7 @@ public class TransferManager {
         updateVelocity(sender.getUniqueId(), amount);
         AsyncLogger.getInstance().logTransaction(sender, receiver, amount, tax);
 
-        if (RedisManager.getInstance() != null) {
-            RedisManager.getInstance().publishTrade("SYSTEM_TRANSFER", amount);
-        }
+        // Do not publish player-to-player transfers to market trade channels.
 
         notifySuccess(sender, receiver, currency, amount, netAmount, tax, isTaxFree);
     }

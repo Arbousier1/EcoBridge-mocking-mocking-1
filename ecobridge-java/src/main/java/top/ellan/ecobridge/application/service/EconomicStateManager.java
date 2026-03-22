@@ -54,27 +54,37 @@ public class EconomicStateManager {
     }
 
     public void recordPurchase(Player player, String productId, int amount) {
+        recordPurchase(player, null, productId, amount);
+    }
+
+    public void recordPurchase(Player player, String shopId, String productId, int amount) {
+        String marketKey = PricingManager.toMarketKey(shopId, productId);
         LogUtil.debug("记录购买行为: " + player.getName() + " -> " + productId + " x" + amount);
 
         if (PricingManager.getInstance() != null) {
             // 购买行为减少供应，传入负值
-            PricingManager.getInstance().onTradeComplete(productId, -amount);
+            PricingManager.getInstance().onTradeComplete(shopId, productId, -amount);
         }
 
         Bukkit.getScheduler().runTaskAsynchronously(EcoBridge.getInstance(), () -> {
-            analyzeMarketAndNotify(productId, (double) -amount);
+            analyzeMarketAndNotify(marketKey, (double) -amount);
         });
     }
 
     public void recordSale(Player player, String productId, int amount) {
+        recordSale(player, null, productId, amount);
+    }
+
+    public void recordSale(Player player, String shopId, String productId, int amount) {
+        String marketKey = PricingManager.toMarketKey(shopId, productId);
         LogUtil.debug("记录出售行为: " + player.getName() + " -> " + productId + " x" + amount);
 
         if (PricingManager.getInstance() != null) {
-            PricingManager.getInstance().onTradeComplete(productId, amount);
+            PricingManager.getInstance().onTradeComplete(shopId, productId, amount);
         }
         
         Bukkit.getScheduler().runTaskAsynchronously(EcoBridge.getInstance(), () -> {
-            analyzeMarketAndNotify(productId, (double) amount);
+            analyzeMarketAndNotify(marketKey, (double) amount);
         });
     }
 

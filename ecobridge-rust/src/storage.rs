@@ -1,5 +1,6 @@
 use crossbeam_channel::{bounded, Receiver, Sender};
 use duckdb::{params, Connection};
+use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -338,4 +339,57 @@ pub fn load_recent_history(days: i64) -> Vec<crate::models::HistoryRecord> {
     
     let _ = pool.recycle.send(raw_conn);
     history
+}
+
+pub fn load_recent_market_history_by_key(days: i64) -> HashMap<String, Vec<crate::models::HistoryRecord>> {
+    let mut result: HashMap<String, Vec<crate::models::HistoryRecord>> = HashMap::new();
+    let pool = match READ_POOL.get() {
+        Some(p) => p,
+        None => return result,
+    };
+    let raw_conn = match pool.available.recv() {
+        Ok(c) => c,
+        Err(_) => return result,
+    };
+
+    let ms_lookback = days * 86_400_000;
+    let cutoff = chrono::Utc::now().timestamp_millis() - ms_lookback;
+    let query = "SELECT ts, delta, metadata FROM economy_log WHERE ts > ? ORDER BY ts ASC";
+    let mut stmt = match raw_conn.prepare(query) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = pool.recycle.send(raw_conn);
+            return result;
+        }
+    };
+
+    let record_iter = match stmt.query_map(params![cutoff], |row| {
+        let timestamp: i64 = row.get(0)?;
+        let amt_f64: f64 = row.get(1)?;
+        let metadata: String = row.get(2)?;
+        Ok((timestamp, amt_f64, metadata))
+    }) {
+        Ok(iter) => iter,
+        Err(_) => {
+            let _ = pool.recycle.send(raw_conn);
+            return result;
+        }
+    };
+
+    for record in record_iter.flatten() {
+        let (timestamp, amt_f64, metadata) = record;
+        if let Some(key) = metadata.strip_prefix("MARKET_TRADE:") {
+            if key.is_empty() {
+                continue;
+            }
+            let bucket = result.entry(key.to_string()).or_default();
+            bucket.push(crate::models::HistoryRecord {
+                timestamp,
+                amount_micros: (amt_f64 * 1_000_000.0) as i64,
+            });
+        }
+    }
+
+    let _ = pool.recycle.send(raw_conn);
+    result
 }

@@ -12,13 +12,9 @@ import top.ellan.ecobridge.application.service.ItemConfigManager; // 确保导�
 import top.ellan.ecobridge.util.LogUtil;
 
 import java.lang.foreign.Arena;
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.SequenceLayout;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
-
-import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
 
 /**
  * 价格计算引擎 (PriceComputeEngine v2.4 - Micros Compatible)
@@ -32,9 +28,6 @@ public class PriceComputeEngine {
 
     // --- [集成部分：静态物品缓存] ---
     private static final List<ItemMeta> CACHED_ITEMS = new CopyOnWriteArrayList<>();
-    
-    // 安全阈值：单次 Critical FFI 调用处理的最大商品数
-    private static final int GC_SAFE_THRESHOLD = 500;
     
     /**
      * 更新全量缓存物品，供监听器使用
@@ -103,75 +96,40 @@ public class PriceComputeEngine {
 
         // 5. FFM 资源安全封装
         try (Arena arena = Arena.ofConfined()) {
-            SequenceLayout tradeCtxLayout = MemoryLayout.sequenceLayout(count, Layouts.TRADE_CONTEXT);
-            SequenceLayout marketCfgLayout = MemoryLayout.sequenceLayout(count, Layouts.MARKET_CONFIG);
-            SequenceLayout doubleArrLayout = MemoryLayout.sequenceLayout(count, JAVA_DOUBLE);
-
-            MemorySegment ctxArray = arena.allocate(tradeCtxLayout);
-            MemorySegment cfgArray = arena.allocate(marketCfgLayout);
-            MemorySegment histAvgArray = arena.allocate(doubleArrLayout);
-            MemorySegment lambdaArray = arena.allocate(doubleArrLayout);
-            MemorySegment resultsArray = arena.allocate(doubleArrLayout);
-
-            double neff = NativeBridge.queryNeffVectorized(now, configTau);
-
-            // 6. 数据 Packing
+            // 6. Per-item keyed calculation
             for (int i = 0; i < count; i++) {
                 ItemMeta meta = activeItems.get(i);
-                
-                long ctxOffset = (long) i * Layouts.TRADE_CONTEXT.byteSize();
-                long cfgOffset = (long) i * Layouts.MARKET_CONFIG.byteSize();
 
-                MemorySegment ctxSlice = ctxArray.asSlice(ctxOffset, Layouts.TRADE_CONTEXT.byteSize());
-                
-                // 填充基础数据 (NativeContextBuilder 已适配 Micros)
-                NativeContextBuilder.fillGlobalContext(ctxSlice, now, 1.0);
-                
+                MemorySegment ctxSeg = arena.allocate(Layouts.TRADE_CONTEXT);
+                MemorySegment cfgSeg = arena.allocate(Layouts.MARKET_CONFIG);
+
+                NativeContextBuilder.fillGlobalContext(ctxSeg, now, 1.0);
                 // Conversion math is delegated to Rust to keep numeric rules centralized.
                 long basePriceMicros = NativeBridge.moneyToMicros(meta.basePrice());
-                NativeBridge.VH_CTX_BASE_PRICE_MICROS.set(ctxArray, ctxOffset, basePriceMicros);
+                NativeBridge.VH_CTX_BASE_PRICE_MICROS.set(ctxSeg, 0L, basePriceMicros);
 
                 ConfigurationSection itemConfig = null;
                 if (itemSettings != null) {
                     itemConfig = itemSettings.getConfigurationSection(meta.shopId() + "." + meta.productId());
                 }
-                // 这里传入 config 用于读取全局环境参数，传入 itemConfig 用于读取权重覆盖
-                fillMarketConfigAtOffset(cfgArray, cfgOffset, itemConfig, config, meta.lambda(), activeVolatility);
+                fillMarketConfigAtOffset(cfgSeg, 0L, itemConfig, config, meta.lambda(), activeVolatility);
 
-                double histAvg = histAvgMap.getOrDefault(meta.productId(), meta.basePrice());
-                histAvgArray.setAtIndex(JAVA_DOUBLE, i, histAvg);
-                lambdaArray.setAtIndex(JAVA_DOUBLE, i, meta.lambda());
-            }
-
-            // 7. 执行分片 FFI 调用
-            for (int i = 0; i < count; i += GC_SAFE_THRESHOLD) {
-                int currentBatchSize = Math.min(GC_SAFE_THRESHOLD, count - i);
-                
-                long offsetCtx = (long) i * Layouts.TRADE_CONTEXT.byteSize();
-                long offsetCfg = (long) i * Layouts.MARKET_CONFIG.byteSize();
-                long offsetDouble = (long) i * JAVA_DOUBLE.byteSize();
-
-                NativeBridge.computeBatchPrices(
-                    (long) currentBatchSize,
+                double histAvg = histAvgMap.getOrDefault(meta.uniqueKey(), meta.basePrice());
+                double neff = NativeBridge.queryNeffForKey(now, configTau, meta.uniqueKey());
+                double epsilon = NativeBridge.calculateEpsilon(ctxSeg, cfgSeg);
+                double computedPrice = NativeBridge.computePriceBounded(
+                    meta.basePrice(),
                     neff,
-                    ctxArray.asSlice(offsetCtx),
-                    cfgArray.asSlice(offsetCfg),
-                    histAvgArray.asSlice(offsetDouble),
-                    lambdaArray.asSlice(offsetDouble),
-                    resultsArray.asSlice(offsetDouble)
+                    0.0,
+                    meta.lambda(),
+                    epsilon,
+                    histAvg
                 );
-            }
 
-            // 8. 结果 Unpacking
-            for (int i = 0; i < count; i++) {
-                double computedPrice = resultsArray.getAtIndex(JAVA_DOUBLE, i);
-                ItemMeta meta = activeItems.get(i);
-                
-                if (Double.isFinite(computedPrice) && computedPrice > 0) {
-                    resultMap.put(meta.uniqueKey(), computedPrice);
-                } else {
-                    resultMap.put(meta.uniqueKey(), meta.basePrice());
-                }
+                resultMap.put(
+                    meta.uniqueKey(),
+                    (Double.isFinite(computedPrice) && computedPrice > 0) ? computedPrice : meta.basePrice()
+                );
             }
             
             if (config.getBoolean("system.debug", false)) {
@@ -223,7 +181,7 @@ public class PriceComputeEngine {
     }
 
     private static Map<String, Double> loadHistoryAverages(List<ItemMeta> items) {
-        List<String> ids = items.stream().map(ItemMeta::productId).distinct().toList();
+        List<String> ids = items.stream().map(ItemMeta::uniqueKey).distinct().toList();
         return TransactionDao.get7DayAveragesBatch(ids);
     }
 

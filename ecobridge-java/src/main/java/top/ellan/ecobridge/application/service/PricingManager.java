@@ -29,6 +29,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public class PricingManager {
 
+    private static final String MARKET_TRADE_META_PREFIX = "MARKET_TRADE:";
+
     private static PricingManager instance;
     private final EcoBridge plugin;
 
@@ -208,11 +210,18 @@ public class PricingManager {
      * 当本服发生交易时调用
      */
     public void onTradeComplete(String productId, double effectiveAmount) {
+        onTradeComplete(null, productId, effectiveAmount);
+    }
+
+    public void onTradeComplete(String shopId, String productId, double effectiveAmount) {
+        String marketKey = toMarketKey(shopId, productId);
+        if (marketKey.isBlank()) return;
+
         long now = System.currentTimeMillis();
         // 提前构建对象，减少锁内耗时
         SaleRecord record = new SaleRecord(now, effectiveAmount);
         
-        var lock = getItemLock(productId).writeLock();
+        var lock = getItemLock(marketKey).writeLock();
         lock.lock();
         try {
             // 1. 更新本地宏观热度 (Local Heat)
@@ -220,7 +229,7 @@ public class PricingManager {
             macroEngine.incrementTradeCounter(); 
 
             // 2. 更新历史记录 (Ring Buffer)
-            getHistoryContainer(productId).add(record, maxHistorySize);
+            getHistoryContainer(marketKey).add(record, maxHistorySize);
 
         } finally {
             // 关键修改：尽早释放锁，避免阻塞后续的 I/O 操作
@@ -231,16 +240,22 @@ public class PricingManager {
         // 即使 execute 阻塞或队列满，也不会卡住持有 productId 锁的线程
         plugin.getVirtualExecutor().execute(() -> {
             try {
-                AsyncLogger.log(java.util.UUID.nameUUIDFromBytes(productId.getBytes()), effectiveAmount, 0, now, "TRX_WRITE_THROUGH");
-                TransactionDao.saveSaleAsync(null, productId, effectiveAmount);
+                AsyncLogger.log(
+                    java.util.UUID.nameUUIDFromBytes(marketKey.getBytes()),
+                    effectiveAmount,
+                    0,
+                    now,
+                    MARKET_TRADE_META_PREFIX + marketKey
+                );
+                TransactionDao.saveSaleAsync(null, marketKey, effectiveAmount);
             } catch (Exception e) {
-                LogUtil.error("交易落库任务执行失败: " + productId, e);
+                LogUtil.error("交易落库任务执行失败: " + marketKey, e);
             }
         });
 
         // 4. 广播全服 (Redis) - 移至锁外
         if (RedisManager.getInstance() != null) {
-            RedisManager.getInstance().publishTrade(productId, effectiveAmount);
+            RedisManager.getInstance().publishTrade(marketKey, effectiveAmount);
         }
     }
 
@@ -248,8 +263,11 @@ public class PricingManager {
      * [远程交易同步] - 核心修复点 (Fix Local Neff Lag)
      * 当从 Redis 收到其他服务器的交易时调用
      */
-    public void onRemoteTradeReceived(String productId, double amount, long timestamp) {
-        var lock = getItemLock(productId).writeLock();
+    public void onRemoteTradeReceived(String marketKey, double amount, long timestamp) {
+        String normalizedKey = normalizeMarketKey(marketKey);
+        if (normalizedKey.isBlank()) return;
+
+        var lock = getItemLock(normalizedKey).writeLock();
         lock.lock();
         try {
             // 1. [CRITICAL FIX] 注入宏观引擎
@@ -260,11 +278,11 @@ public class PricingManager {
 
             // 2. 更新历史记录
             SaleRecord record = new SaleRecord(timestamp, amount);
-            getHistoryContainer(productId).add(record, maxHistorySize);
+            getHistoryContainer(normalizedKey).add(record, maxHistorySize);
             
             // 3. 注入 Native 状态 (如需反作弊或 Rust 侧统计)
             if (NativeBridge.isLoaded()) {
-                NativeBridge.injectRemoteTrade(NativeBridge.moneyToMicros(amount));
+                NativeBridge.injectRemoteTradeForKey(normalizedKey, NativeBridge.moneyToMicros(amount));
             }
         } finally {
             lock.unlock();
@@ -289,6 +307,17 @@ public class PricingManager {
     public void clearCache() {
         historyCache.invalidateAll();
         itemLocks.invalidateAll();
+    }
+
+    public static String toMarketKey(String shopId, String productId) {
+        String p = normalizeMarketKey(productId);
+        if (p.isBlank()) return "";
+        String s = normalizeMarketKey(shopId);
+        return s.isBlank() ? p : s + "." + p;
+    }
+
+    private static String normalizeMarketKey(String input) {
+        return input == null ? "" : input.trim().toLowerCase(Locale.ROOT);
     }
 
     /**

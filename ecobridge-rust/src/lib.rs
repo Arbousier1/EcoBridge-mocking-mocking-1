@@ -5,8 +5,11 @@
 use libc::{c_char, c_double, c_int, c_longlong}; 
 use std::ffi::CStr;
 use std::panic::{self, AssertUnwindSafe};
+use std::collections::HashMap;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::ptr;
+use lazy_static::lazy_static;
 
 // -----------------------------------------------------------------------------
 // 模块声明
@@ -46,6 +49,17 @@ pub enum EconStatus {
 // -----------------------------------------------------------------------------
 static REMOTE_FLOW_ACCUMULATOR_MICROS: AtomicI64 = AtomicI64::new(0);
 const MICROS_SCALE: f64 = 1_000_000.0;
+const MARKET_META_PREFIX: &str = "MARKET_TRADE:";
+
+lazy_static! {
+    static ref REMOTE_FLOW_ACCUMULATOR_BY_KEY: RwLock<HashMap<String, i64>> = RwLock::new(HashMap::new());
+}
+
+#[inline]
+fn extract_market_key(meta: &str) -> Option<&str> {
+    let key = meta.strip_prefix(MARKET_META_PREFIX)?;
+    if key.is_empty() { None } else { Some(key) }
+}
 
 #[inline]
 fn to_micros_saturating(value: f64) -> i64 {
@@ -162,9 +176,10 @@ pub unsafe extern "C" fn ecobridge_log_to_duckdb(
         
         let amount_f64 = (trade_amount_micros as f64) / MICROS_SCALE;
         let balance_f64 = (balance_micros as f64) / MICROS_SCALE;
-        
-        // Keep trade direction: buy<0, sell>0. Directional neff needs signed flow.
-        economy::summation::append_trade_to_memory(ts, amount_f64);
+
+        if let Some(market_key) = extract_market_key(&meta) {
+            economy::summation::append_trade_to_memory(ts, amount_f64, market_key);
+        }
         storage::log_economy_event(ts, uuid, amount_f64, balance_f64, meta);
         
         EconStatus::Ok
@@ -179,6 +194,28 @@ pub unsafe extern "C" fn ecobridge_log_to_duckdb(
 pub extern "C" fn inject_remote_trade(amount_micros: c_longlong) -> c_int {
     ffi_guard!(|| {
         REMOTE_FLOW_ACCUMULATOR_MICROS.fetch_add(amount_micros, Ordering::SeqCst);
+        EconStatus::Ok
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn inject_remote_trade_for_key(
+    market_key_ptr: *const c_char,
+    amount_micros: c_longlong,
+) -> c_int {
+    ffi_guard!(|| {
+        if market_key_ptr.is_null() {
+            return EconStatus::NullPointer;
+        }
+        let market_key = match CStr::from_ptr(market_key_ptr).to_str() {
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => return EconStatus::InvalidValue,
+        };
+
+        if let Ok(mut lock) = REMOTE_FLOW_ACCUMULATOR_BY_KEY.write() {
+            let entry = lock.entry(market_key).or_insert(0);
+            *entry = entry.saturating_add(amount_micros);
+        }
         EconStatus::Ok
     })
 }
@@ -304,10 +341,43 @@ pub unsafe extern "C" fn ecobridge_query_neff_vectorized(
         if out_result.is_null() { return EconStatus::NullPointer; }
         if tau <= 0.0 { return EconStatus::InvalidValue; }
 
-        let local_neff = economy::summation::query_neff_internal(current_ts, tau);
+        let local_neff = economy::summation::query_neff_global_internal(current_ts, tau);
         let remote_micros = REMOTE_FLOW_ACCUMULATOR_MICROS.swap(0, Ordering::SeqCst);
         let remote_neff = (remote_micros as f64) / MICROS_SCALE;
         
+        *out_result = local_neff + remote_neff;
+        EconStatus::Ok
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ecobridge_query_neff_for_key(
+    current_ts: c_longlong,
+    tau: c_double,
+    market_key_ptr: *const c_char,
+    out_result: *mut c_double,
+) -> c_int {
+    ffi_guard!(|| {
+        if out_result.is_null() || market_key_ptr.is_null() {
+            return EconStatus::NullPointer;
+        }
+        if tau <= 0.0 {
+            return EconStatus::InvalidValue;
+        }
+
+        let market_key = match CStr::from_ptr(market_key_ptr).to_str() {
+            Ok(v) if !v.trim().is_empty() => v.trim(),
+            _ => return EconStatus::InvalidValue,
+        };
+
+        let local_neff = economy::summation::query_neff_internal(current_ts, tau, market_key);
+        let remote_micros = if let Ok(mut lock) = REMOTE_FLOW_ACCUMULATOR_BY_KEY.write() {
+            lock.remove(market_key).unwrap_or(0)
+        } else {
+            0
+        };
+        let remote_neff = (remote_micros as f64) / MICROS_SCALE;
+
         *out_result = local_neff + remote_neff;
         EconStatus::Ok
     })

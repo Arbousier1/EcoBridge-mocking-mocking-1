@@ -12,6 +12,7 @@
 
 use crate::models::HistoryRecord;
 use crate::storage;
+use std::collections::HashMap;
 use std::sync::RwLock;
 use lazy_static::lazy_static;
 
@@ -27,6 +28,7 @@ const PARALLEL_THRESHOLD: usize = 750;
 const MS_PER_DAY: f64 = 86_400_000.0;
 const MAX_FUTURE_TOLERANCE: i64 = 60_000;
 const MICROS_SCALE: f64 = 1_000_000.0; // [v1.6.0] 精度缩放因子
+const GLOBAL_MARKET_KEY: &str = "__global__";
 
 // 内存管理阈值
 const MAX_HISTORY_SIZE: usize = 500_000;
@@ -35,34 +37,47 @@ const PRUNE_TO_SIZE: usize = 400_000;
 // ==================== 全局内存态 (Hot Memory Layer) ====================
 
 lazy_static! {
-    static ref HOT_HISTORY: RwLock<Vec<HistoryRecord>> = RwLock::new(Vec::with_capacity(MAX_HISTORY_SIZE));
+    static ref HOT_HISTORY_BY_KEY: RwLock<HashMap<String, Vec<HistoryRecord>>> = RwLock::new(HashMap::new());
 }
 
 /// 初始化加载逻辑 (服务器启动时调用)
 pub fn hydrate_hot_store() {
-    let records = storage::load_recent_history(30); 
-    let len = records.len();
-    
-    let mut lock = HOT_HISTORY.write().unwrap();
-    *lock = records;
-    
-    println!("[EcoBridge-Native] v1.6.0 SIMD 引擎热数据装填完成: {} 条记录", len);
+    let records_by_key = storage::load_recent_market_history_by_key(30);
+    let total: usize = records_by_key.values().map(Vec::len).sum();
+    let markets = records_by_key.len();
+
+    let mut lock = HOT_HISTORY_BY_KEY.write().unwrap();
+    *lock = records_by_key;
+
+    println!(
+        "[EcoBridge-Native] v1.6.0 SIMD keyed hot store loaded: {} records across {} markets",
+        total, markets
+    );
 }
 
 /// 实时双写逻辑
 /// @param amount 这里的 amount 为原始 double，内部转换为 i64 Micros 存储
-pub fn append_trade_to_memory(ts: i64, amount: f64) {
-    let mut lock = HOT_HISTORY.write().unwrap();
-    
-    lock.push(HistoryRecord {
-        timestamp: ts,
-        amount_micros: (amount * MICROS_SCALE) as i64, // [Precision Fix] 转换为定点数
-    });
-    
-    if lock.len() > MAX_HISTORY_SIZE {
-        let remove_count = lock.len() - PRUNE_TO_SIZE;
-        lock.drain(0..remove_count);
-    }
+pub fn append_trade_to_memory(ts: i64, amount: f64, market_key: &str) {
+    let mut lock = HOT_HISTORY_BY_KEY.write().unwrap();
+
+    let amount_micros = (amount * MICROS_SCALE) as i64;
+    let push_record = |bucket: &mut Vec<HistoryRecord>| {
+        bucket.push(HistoryRecord {
+            timestamp: ts,
+            amount_micros,
+        });
+        if bucket.len() > MAX_HISTORY_SIZE {
+            let remove_count = bucket.len() - PRUNE_TO_SIZE;
+            bucket.drain(0..remove_count);
+        }
+    };
+
+    let bucket = lock.entry(market_key.to_string()).or_insert_with(|| Vec::with_capacity(1024));
+    push_record(bucket);
+
+    // Keep a global aggregate key for compatibility and diagnostics.
+    let global_bucket = lock.entry(GLOBAL_MARKET_KEY.to_string()).or_insert_with(|| Vec::with_capacity(4096));
+    push_record(global_bucket);
 }
 
 // ==================== 核心接口 ====================
@@ -70,9 +85,17 @@ pub fn append_trade_to_memory(ts: i64, amount: f64) {
 pub fn query_neff_internal(
     current_ts: i64,
     tau: f64,
+    market_key: &str,
 ) -> f64 {
-    let lock = HOT_HISTORY.read().unwrap();
-    calculate_volume_in_memory(&lock, current_ts, tau)
+    let lock = HOT_HISTORY_BY_KEY.read().unwrap();
+    if let Some(history) = lock.get(market_key) {
+        return calculate_volume_in_memory(history, current_ts, tau);
+    }
+    0.0
+}
+
+pub fn query_neff_global_internal(current_ts: i64, tau: f64) -> f64 {
+    query_neff_internal(current_ts, tau, GLOBAL_MARKET_KEY)
 }
 
 // ==================== 内存计算实现 (Binary Search + SIMD) ====================

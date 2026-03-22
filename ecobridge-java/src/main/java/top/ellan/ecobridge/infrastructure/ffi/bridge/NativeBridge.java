@@ -122,7 +122,9 @@ public class NativeBridge {
     private static volatile MethodHandle computePriceBoundedMH;
     private static volatile MethodHandle computeBatchPricesMH;
     private static volatile MethodHandle injectRemoteTradeMH;
+    private static volatile MethodHandle injectRemoteTradeForKeyMH;
     private static volatile MethodHandle getDynamicLimitMH;
+    private static volatile MethodHandle queryNeffForKeyMH;
     private static volatile MethodHandle moneyToMicrosMH;
     private static volatile MethodHandle microsToMoneyMH;
     private static volatile MethodHandle computeVolatilityFromStabilityMH;
@@ -239,6 +241,7 @@ public class NativeBridge {
         getHealthStatsMH = bind(linker, "ecobridge_get_health_stats", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
         pushToDuckDBMH = bind(linker, "ecobridge_log_to_duckdb", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS));
         queryNeffVectorizedMH = bind(linker, "ecobridge_query_neff_vectorized", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_DOUBLE, ADDRESS));
+        queryNeffForKeyMH = bind(linker, "ecobridge_query_neff_for_key", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_DOUBLE, ADDRESS, ADDRESS));
         
         computePriceMH = bind(linker, "ecobridge_compute_price_humane", FunctionDescriptor.of(JAVA_INT, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, ADDRESS), Linker.Option.critical(true));
         calculateEpsilonMH = bind(linker, "ecobridge_calculate_epsilon", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS), Linker.Option.critical(true));
@@ -253,6 +256,7 @@ public class NativeBridge {
         resetPidMH = bind(linker, "ecobridge_reset_pid_state", FunctionDescriptor.of(JAVA_INT, ADDRESS));
         computeBatchPricesMH = bind(linker, "ecobridge_compute_batch_prices", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_DOUBLE, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
         injectRemoteTradeMH = bind(linker, "inject_remote_trade", FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
+        injectRemoteTradeForKeyMH = bind(linker, "inject_remote_trade_for_key", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
         getDynamicLimitMH = bind(linker, "ecobridge_get_dynamic_limit", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, ADDRESS));
         moneyToMicrosMH = bind(linker, "ecobridge_money_to_micros", FunctionDescriptor.of(JAVA_INT, JAVA_DOUBLE, ADDRESS));
         microsToMoneyMH = bind(linker, "ecobridge_micros_to_money", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
@@ -308,6 +312,7 @@ public class NativeBridge {
         calcInflationMH = null; calcStabilityMH = null; calcDecayMH = null;
         computeTierPriceMH = null; computePriceBoundedMH = null; computeBatchPricesMH = null;
         injectRemoteTradeMH = null; getDynamicLimitMH = null;
+        injectRemoteTradeForKeyMH = null; queryNeffForKeyMH = null;
         moneyToMicrosMH = null; microsToMoneyMH = null; computeVolatilityFromStabilityMH = null;
         computeVelocityDecayMH = null; computeFallbackTaxMH = null; computeSettlementMH = null;
     }
@@ -481,6 +486,16 @@ public class NativeBridge {
         }, null, false);
     }
 
+    public static void injectRemoteTradeForKey(String marketKey, long amountMicros) {
+        if (marketKey == null || marketKey.isBlank()) return;
+        executeSafely(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                injectRemoteTradeForKeyMH.invokeExact(arena.allocateFrom(marketKey), amountMicros);
+            }
+            return null;
+        }, null, false);
+    }
+
     public static void pushToDuckDB(long ts, String uuid, double amount, double bal, String meta) {
         executeSafely(() -> {
             try (Arena arena = Arena.ofConfined()) {
@@ -559,6 +574,17 @@ public class NativeBridge {
                 MemorySegment out = arena.allocate(JAVA_DOUBLE);
                 int status = (int) queryNeffVectorizedMH.invokeExact(now, tau, out);
                 return status == 0 ? out.get(JAVA_DOUBLE, 0) : 0.0;
+            }
+        }, 0.0, false);
+    }
+
+    public static double queryNeffForKey(long now, double tau, String marketKey) {
+        if (marketKey == null || marketKey.isBlank()) return 0.0;
+        return executeSafely(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment out = arena.allocate(JAVA_DOUBLE);
+                int status = (int) queryNeffForKeyMH.invokeExact(now, tau, arena.allocateFrom(marketKey), out);
+                return status == 0 ? out.get(JAVA_DOUBLE, 0L) : 0.0;
             }
         }, 0.0, false);
     }

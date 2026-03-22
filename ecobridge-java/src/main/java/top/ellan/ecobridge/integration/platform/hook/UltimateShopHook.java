@@ -65,11 +65,12 @@ public class UltimateShopHook implements Listener {
         boolean isBuy = UltimateShopCompat.resolveBuyFlag(event);
         int amount = UltimateShopCompat.resolveAmount(event);
         String productId = item.getProduct();
+        String shopId = item.getShop();
 
         if (isBuy) {
-            EconomicStateManager.getInstance().recordPurchase(player, productId, amount);
+            EconomicStateManager.getInstance().recordPurchase(player, shopId, productId, amount);
         } else {
-            EconomicStateManager.getInstance().recordSale(player, productId, amount);
+            EconomicStateManager.getInstance().recordSale(player, shopId, productId, amount);
         }
     }
 
